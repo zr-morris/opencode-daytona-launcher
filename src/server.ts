@@ -75,6 +75,9 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
     sandbox = await daytona.create(
       {
         image: SANDBOX_IMAGE,
+        // public: true removes Daytona's preview interstitial + auth gate so the
+        // OpenCode Web URL opens directly in any browser.
+        public: true,
         envVars,
         resources: { cpu: 1, memory: 2, disk: 5 },
       },
