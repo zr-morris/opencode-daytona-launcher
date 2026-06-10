@@ -1,0 +1,25 @@
+{
+  "name": "opencode-daytona-launcher",
+  "version": "1.0.0",
+  "description": "Backend that launches OpenCode Web inside on-demand Daytona sandboxes (per the Daytona OpenCode Web guide).",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && node dist/server.js"
+  },
+  "keywords": ["opencode", "daytona", "render", "sandbox"],
+  "license": "MIT",
+  "dependencies": {
+    "@daytona/sdk": "^0.186.0",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.8.0",
+    "typescript": "^5.4.0"
+  }
+}
