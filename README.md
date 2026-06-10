@@ -19,7 +19,14 @@ Deployed on Render's free tier. When a user clicks **Launch**, the backend:
 - `GET /healthz` — health check (used by Render)
 - `POST /api/launch` — create a sandbox + start OpenCode; returns `{ url, token, sandboxId }`
 - `POST /api/stop` — body `{ "sandboxId": "..." }` deletes a sandbox
-- `GET /api/sandboxes` — list sandboxes launched by this instance
+- `GET /api/sandboxes` — list **live** sandboxes created by this launcher (queried from Daytona, scoped by the `app=opencode-launcher` label; terminal/destroying states hidden)
+
+## Managing sandboxes
+
+The landing page shows an **Active sandboxes** section listing every sandbox
+this launcher created (label-scoped). Each row has an **open** link and a
+**Stop** button that deletes the sandbox via `POST /api/stop`. Use **Refresh**
+to re-query Daytona. Stopping a sandbox frees Daytona free-tier resources.
 
 ## Environment variables (set in Render dashboard)
 
