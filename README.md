@@ -43,3 +43,22 @@ npm run dev            # builds + runs on PORT (default 3000)
   on Render.
 - Each launched sandbox consumes Daytona resources; use `POST /api/stop` (or the
   Daytona dashboard) to clean up when finished.
+
+## Default model
+
+The launched OpenCode instances default to **DeepSeek V4 Flash Free**
+(`opencode/deepseek-v4-flash-free`), served through OpenCode's free gateway —
+no API key required. This is set via the injected OpenCode config (top-level
+`model` plus the `daytona` agent's `model`). Users can switch models in the
+OpenCode Web UI at any time.
+
+## Daytona free-tier note (sandbox class)
+
+Daytona's default snapshot uses the `linux-vm` class, which free-tier orgs
+cannot run in the `us` region (`Region us is not available to the organization
+for class linux-vm`). To stay on the free tier, this backend creates sandboxes
+**from an image** (`node:20-slim` by default), which runs as the `container`
+class. Override with env vars if needed:
+
+- `SANDBOX_IMAGE` (default `node:20-slim`)
+- `DAYTONA_TARGET` (default `us`)
