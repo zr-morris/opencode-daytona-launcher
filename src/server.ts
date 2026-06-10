@@ -18,6 +18,10 @@ const PORT = parseInt(process.env.PORT || '3000', 10)
 const OPENCODE_PORT = 3000
 const OPENCODE_VERSION = '1.17.3'
 const DEFAULT_MODEL = 'opencode/deepseek-v4-flash-free' // DeepSeek V4 Flash Free (no API key required)
+// Free-tier Daytona orgs cannot run the default snapshot's linux-vm class.
+// Creating from an image runs as the container class, which the free tier allows.
+const DAYTONA_TARGET = process.env.DAYTONA_TARGET || 'us'
+const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20-slim'
 
 const daytonaApiKey = process.env.DAYTONA_API_KEY
 if (!daytonaApiKey) {
@@ -44,6 +48,8 @@ app.get('/healthz', (_req: Request, res: Response) => {
     daytonaConfigured: Boolean(daytonaApiKey),
     opencodeVersion: OPENCODE_VERSION,
     defaultModel: DEFAULT_MODEL,
+    sandboxImage: SANDBOX_IMAGE,
+    daytonaTarget: DAYTONA_TARGET,
     activeSandboxes: sandboxes.size,
   })
 })
@@ -59,14 +65,21 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
     return res.status(500).json({ error: 'DAYTONA_API_KEY is not configured on the server.' })
   }
 
-  const daytona = new Daytona({ apiKey: daytonaApiKey })
+  const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
   let sandbox: Sandbox | undefined
 
   try {
     console.log('[launch] Creating sandbox...')
     const envVars: Record<string, string> = {}
     if (process.env.OPENAI_API_KEY) envVars.OPENAI_API_KEY = process.env.OPENAI_API_KEY
-    sandbox = await daytona.create({ envVars })
+    sandbox = await daytona.create(
+      {
+        image: SANDBOX_IMAGE,
+        envVars,
+        resources: { cpu: 1, memory: 2, disk: 5 },
+      },
+      { timeout: 180 },
+    )
 
     console.log('[launch] Installing OpenCode...')
     await sandbox.process.executeCommand(`npm i -g opencode-ai@${OPENCODE_VERSION}`)
@@ -139,7 +152,7 @@ app.post('/api/stop', async (req: Request, res: Response) => {
   const sandboxId = (req.body && req.body.sandboxId) as string | undefined
   if (!sandboxId) return res.status(400).json({ error: 'sandboxId is required' })
   try {
-    const daytona = new Daytona({ apiKey: daytonaApiKey })
+    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
     const sb = await (daytona as any).get(sandboxId)
     if (sb) await sb.delete()
     sandboxes.delete(sandboxId)
