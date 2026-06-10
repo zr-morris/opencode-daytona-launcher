@@ -23,6 +23,9 @@ const DEFAULT_MODEL = 'opencode/deepseek-v4-flash-free' // DeepSeek V4 Flash Fre
 const DAYTONA_TARGET = process.env.DAYTONA_TARGET || 'us'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20-slim'
 const APP_LABEL = 'opencode-launcher' // label so we only list/stop sandboxes we created
+const THEME_NAME = 'kpmg-midnight'
+// KPMG Midnight theme (Concept 2): blue->violet brand palette. Full 50-role OpenCode theme.
+const KPMG_THEME_JSON = "{\"$schema\": \"https://opencode.ai/theme.json\", \"defs\": {\"kpmgBlue\": \"#00338D\", \"kpmgMediumBlue\": \"#005EB8\", \"kpmgLightBlue\": \"#0091DA\", \"kpmgViolet\": \"#483698\", \"kpmgVioletLift\": \"#6E5BD6\", \"kpmgPurple\": \"#470A68\", \"kpmgLightPurple\": \"#6D2077\", \"kpmgTeal\": \"#00A3A1\", \"kpmgGreen\": \"#43B02A\", \"kpmgGold\": \"#EAAA00\", \"kpmgMagenta\": \"#C6007E\", \"kpmgOrange\": \"#F68D2E\", \"midnightBg\": \"#0B0A1A\", \"midnightPanel\": \"#13112A\", \"midnightElement\": \"#161430\", \"midnightBorder\": \"#262150\", \"midnightBorderActive\": \"#3A327A\", \"midnightBorderSubtle\": \"#1E1A40\", \"textLight\": \"#ECEAF7\", \"textMutedDark\": \"#8A85B0\", \"lightBg\": \"#FBFBFD\", \"lightPanel\": \"#F0EFF7\", \"lightElement\": \"#E8E6F3\", \"lightBorder\": \"#D7D4E8\", \"inkDark\": \"#1A1730\", \"diffAddBgDark\": \"#10241C\", \"diffRemBgDark\": \"#2A1020\", \"diffCtxBgDark\": \"#13112A\", \"diffAddBgLight\": \"#E2F3EC\", \"diffRemBgLight\": \"#F7E3EE\"}, \"theme\": {\"primary\": {\"dark\": \"kpmgVioletLift\", \"light\": \"kpmgViolet\"}, \"secondary\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"accent\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgTeal\"}, \"info\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"success\": {\"dark\": \"kpmgGreen\", \"light\": \"#2E9A1C\"}, \"error\": {\"dark\": \"kpmgMagenta\", \"light\": \"#A8005F\"}, \"warning\": {\"dark\": \"kpmgGold\", \"light\": \"#B57A00\"}, \"text\": {\"dark\": \"textLight\", \"light\": \"inkDark\"}, \"textMuted\": {\"dark\": \"textMutedDark\", \"light\": \"#5A5478\"}, \"background\": {\"dark\": \"midnightBg\", \"light\": \"lightBg\"}, \"backgroundPanel\": {\"dark\": \"midnightPanel\", \"light\": \"lightPanel\"}, \"backgroundElement\": {\"dark\": \"midnightElement\", \"light\": \"lightElement\"}, \"border\": {\"dark\": \"midnightBorder\", \"light\": \"lightBorder\"}, \"borderActive\": {\"dark\": \"midnightBorderActive\", \"light\": \"kpmgViolet\"}, \"borderSubtle\": {\"dark\": \"midnightBorderSubtle\", \"light\": \"#E2E0EF\"}, \"diffAdded\": {\"dark\": \"kpmgGreen\", \"light\": \"#2E9A1C\"}, \"diffRemoved\": {\"dark\": \"kpmgMagenta\", \"light\": \"#A8005F\"}, \"diffContext\": {\"dark\": \"textMutedDark\", \"light\": \"#5A5478\"}, \"diffHunkHeader\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"diffHighlightAdded\": {\"dark\": \"kpmgGreen\", \"light\": \"#2E9A1C\"}, \"diffHighlightRemoved\": {\"dark\": \"kpmgMagenta\", \"light\": \"#A8005F\"}, \"diffAddedBg\": {\"dark\": \"diffAddBgDark\", \"light\": \"diffAddBgLight\"}, \"diffRemovedBg\": {\"dark\": \"diffRemBgDark\", \"light\": \"diffRemBgLight\"}, \"diffContextBg\": {\"dark\": \"diffCtxBgDark\", \"light\": \"lightPanel\"}, \"diffLineNumber\": {\"dark\": \"midnightBorderActive\", \"light\": \"lightBorder\"}, \"diffAddedLineNumberBg\": {\"dark\": \"diffAddBgDark\", \"light\": \"diffAddBgLight\"}, \"diffRemovedLineNumberBg\": {\"dark\": \"diffRemBgDark\", \"light\": \"diffRemBgLight\"}, \"markdownText\": {\"dark\": \"textLight\", \"light\": \"inkDark\"}, \"markdownHeading\": {\"dark\": \"kpmgVioletLift\", \"light\": \"kpmgViolet\"}, \"markdownLink\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"markdownLinkText\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgTeal\"}, \"markdownCode\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgLightPurple\"}, \"markdownBlockQuote\": {\"dark\": \"textMutedDark\", \"light\": \"#5A5478\"}, \"markdownEmph\": {\"dark\": \"kpmgGold\", \"light\": \"#B57A00\"}, \"markdownStrong\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgBlue\"}, \"markdownHorizontalRule\": {\"dark\": \"midnightBorder\", \"light\": \"lightBorder\"}, \"markdownListItem\": {\"dark\": \"kpmgVioletLift\", \"light\": \"kpmgViolet\"}, \"markdownListEnumeration\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgTeal\"}, \"markdownImage\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"markdownImageText\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgTeal\"}, \"markdownCodeBlock\": {\"dark\": \"textLight\", \"light\": \"inkDark\"}, \"syntaxComment\": {\"dark\": \"textMutedDark\", \"light\": \"#7A7398\"}, \"syntaxKeyword\": {\"dark\": \"kpmgVioletLift\", \"light\": \"kpmgViolet\"}, \"syntaxFunction\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"syntaxVariable\": {\"dark\": \"textLight\", \"light\": \"inkDark\"}, \"syntaxString\": {\"dark\": \"kpmgTeal\", \"light\": \"#00807E\"}, \"syntaxNumber\": {\"dark\": \"kpmgGold\", \"light\": \"#B57A00\"}, \"syntaxType\": {\"dark\": \"kpmgTeal\", \"light\": \"kpmgLightPurple\"}, \"syntaxOperator\": {\"dark\": \"kpmgLightBlue\", \"light\": \"kpmgMediumBlue\"}, \"syntaxPunctuation\": {\"dark\": \"textLight\", \"light\": \"inkDark\"}}}"
 
 const daytonaApiKey = process.env.DAYTONA_API_KEY
 if (!daytonaApiKey) {
@@ -49,6 +52,7 @@ app.get('/healthz', (_req: Request, res: Response) => {
     daytonaConfigured: Boolean(daytonaApiKey),
     opencodeVersion: OPENCODE_VERSION,
     defaultModel: DEFAULT_MODEL,
+    theme: THEME_NAME,
     sandboxImage: SANDBOX_IMAGE,
     daytonaTarget: DAYTONA_TARGET,
     activeSandboxes: sandboxes.size,
@@ -108,6 +112,7 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
     const opencodeConfig = {
       $schema: 'https://opencode.ai/config.json',
       model: DEFAULT_MODEL,
+      theme: THEME_NAME,
       default_agent: 'daytona',
       agent: {
         daytona: {
@@ -124,6 +129,17 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
 
     const sessionId = `opencode-session-${Date.now()}`
     await sandbox.process.createSession(sessionId)
+
+    // Install the KPMG Midnight theme into the sandbox's OpenCode config dir.
+    // OpenCode reads custom themes from ~/.config/opencode/themes/*.json and selects via tui.json.
+    const themeB64 = Buffer.from(KPMG_THEME_JSON).toString('base64')
+    const tuiJson = JSON.stringify({ $schema: 'https://opencode.ai/tui.json', theme: THEME_NAME })
+    const tuiB64 = Buffer.from(tuiJson).toString('base64')
+    await sandbox.process.executeCommand(
+      `mkdir -p "$HOME/.config/opencode/themes" && ` +
+        `echo '${themeB64}' | base64 -d > "$HOME/.config/opencode/themes/${THEME_NAME}.json" && ` +
+        `echo '${tuiB64}' | base64 -d > "$HOME/.config/opencode/tui.json"`,
+    )
 
     const envVar = injectEnvVar('OPENCODE_CONFIG_CONTENT', configJson)
     await sandbox.process.executeSessionCommand(sessionId, {
@@ -145,6 +161,7 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       token: previewToken,
       opencodeVersion: OPENCODE_VERSION,
       defaultModel: DEFAULT_MODEL,
+      theme: THEME_NAME,
       note: 'OpenCode Web is starting inside the Daytona sandbox. Open the URL; it may take a few seconds to become available. If prompted, the preview token authorizes access to this sandbox.',
     })
   } catch (err: any) {
