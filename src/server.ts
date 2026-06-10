@@ -22,6 +22,7 @@ const DEFAULT_MODEL = 'opencode/deepseek-v4-flash-free' // DeepSeek V4 Flash Fre
 // Creating from an image runs as the container class, which the free tier allows.
 const DAYTONA_TARGET = process.env.DAYTONA_TARGET || 'us'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20-slim'
+const APP_LABEL = 'opencode-launcher' // label so we only list/stop sandboxes we created
 
 const daytonaApiKey = process.env.DAYTONA_API_KEY
 if (!daytonaApiKey) {
@@ -78,6 +79,7 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
         // public: true removes Daytona's preview interstitial + auth gate so the
         // OpenCode Web URL opens directly in any browser.
         public: true,
+        labels: { app: APP_LABEL },
         envVars,
         resources: { cpu: 1, memory: 2, disk: 5 },
       },
@@ -169,11 +171,35 @@ app.post('/api/stop', async (req: Request, res: Response) => {
   }
 })
 
-// --- List tracked sandboxes ---
-app.get('/api/sandboxes', (_req: Request, res: Response) => {
-  const out: any[] = []
-  sandboxes.forEach((v, k) => out.push({ sandboxId: k, ...v }))
-  res.json({ count: out.length, sandboxes: out })
+// --- List sandboxes created by this launcher (live from Daytona, scoped by label) ---
+app.get('/api/sandboxes', async (_req: Request, res: Response) => {
+  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+  try {
+    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const out: any[] = []
+    const HIDDEN_STATES = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
+    for await (const sb of daytona.list({ labels: { app: APP_LABEL } } as any)) {
+      const id = (sb as any).id ?? (sb as any).sandboxId
+      const state = (sb as any).state ?? 'unknown'
+      if (HIDDEN_STATES.has(String(state))) continue
+      let url = sandboxes.get(id)?.url || ''
+      if (!url) {
+        try { url = (await sb.getPreviewLink(OPENCODE_PORT)).url } catch {}
+      }
+      out.push({
+        sandboxId: id,
+        state,
+        public: (sb as any).public ?? null,
+        createdAt: (sb as any).createdAt ?? null,
+        url,
+      })
+    }
+    // newest first
+    out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    res.json({ count: out.length, sandboxes: out })
+  } catch (err: any) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
 })
 
 app.listen(PORT, '0.0.0.0', () => {
@@ -189,22 +215,43 @@ const LANDING_HTML = `<!DOCTYPE html>
 <title>OpenCode on Daytona</title>
 <style>
   :root { color-scheme: dark; }
-  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
-  .card { max-width: 640px; padding: 32px; border: 1px solid #222; border-radius: 12px; background: #111418; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+  .card { width: 100%; max-width: 680px; padding: 32px; border: 1px solid #222; border-radius: 12px; background: #111418; }
   h1 { margin: 0 0 8px; font-size: 22px; }
+  h2 { font-size: 14px; color: #9a9a9a; margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 0.05em; }
   p { color: #aaa; line-height: 1.5; }
-  button { background: #3ddc84; color: #002; border: 0; padding: 12px 20px; font-size: 15px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+  button { background: #3ddc84; color: #002; border: 0; padding: 12px 20px; font-size: 15px; border-radius: 8px; cursor: pointer; font-weight: 700; font-family: inherit; }
   button[disabled] { opacity: 0.6; cursor: wait; }
-  #out { margin-top: 20px; padding: 14px; background: #0d1115; border: 1px solid #222; border-radius: 8px; white-space: pre-wrap; word-break: break-all; display: none; }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+  .btn-stop { background: #ff5c5c; color: #fff; }
+  .btn-ghost { background: transparent; color: #9a9a9a; border: 1px solid #333; }
+  #out { margin-top: 20px; padding: 14px; background: #0d1115; border: 1px solid #222; border-radius: 8px; word-break: break-all; display: none; }
   a { color: #3ddc84; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #222; border-radius: 8px; margin-bottom: 8px; background: #0d1115; }
+  .row .meta { flex: 1; min-width: 0; }
+  .row .id { font-size: 13px; color: #ddd; }
+  .row .sub { font-size: 11px; color: #808080; margin-top: 2px; }
+  .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: #1e262e; color: #7cc5ff; }
+  .muted { color: #707070; font-size: 13px; }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>OpenCode on Daytona</h1>
   <p>This backend launches the <strong>OpenCode</strong> AI coding agent inside an on-demand <strong>Daytona</strong> sandbox and gives you a preview link to the OpenCode Web interface.</p>
-  <button id="go" onclick="launch()">Launch OpenCode Web</button>
+  <div class="bar">
+    <button id="go" onclick="launch()">Launch OpenCode Web</button>
+  </div>
   <div id="out"></div>
+
+  <h2>Active sandboxes</h2>
+  <div class="bar" style="margin-bottom: 12px">
+    <button class="btn-sm btn-ghost" onclick="refresh()">Refresh</button>
+    <span id="listStatus" class="muted"></span>
+  </div>
+  <div id="list"></div>
+</div>
 <script>
 async function launch() {
   const btn = document.getElementById('go')
@@ -217,9 +264,9 @@ async function launch() {
     const r = await fetch('/api/launch', { method: 'POST' })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Launch failed')
-    var tokenLine = d.token ? ('<br><br>Preview token (if prompted):<br><code>' + d.token + '</code>') : ''
-    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + tokenLine
+    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>'
     btn.textContent = 'Launch another'
+    refresh()
   } catch (e) {
     out.textContent = 'Error: ' + (e.message || e)
     btn.textContent = 'Try again'
@@ -227,6 +274,61 @@ async function launch() {
     btn.disabled = false
   }
 }
+
+function short(id) { return (id || '').slice(0, 8) }
+function age(iso) {
+  if (!iso) return ''
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000)
+  if (s < 60) return Math.floor(s) + 's ago'
+  if (s < 3600) return Math.floor(s / 60) + 'm ago'
+  return Math.floor(s / 3600) + 'h ago'
+}
+
+async function refresh() {
+  const list = document.getElementById('list')
+  const status = document.getElementById('listStatus')
+  status.textContent = 'loading...'
+  try {
+    const r = await fetch('/api/sandboxes')
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error || 'Failed to list')
+    const items = d.sandboxes || []
+    status.textContent = items.length + ' sandbox' + (items.length === 1 ? '' : 'es')
+    if (!items.length) {
+      list.innerHTML = '<p class="muted">No active sandboxes.</p>'
+      return
+    }
+    list.innerHTML = items.map(function (s) {
+      var link = s.url ? ('<a href="' + s.url + '" target="_blank" rel="noopener">open</a>') : ''
+      return '<div class="row">' +
+        '<div class="meta"><div class="id">' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span></div>' +
+        '<div class="sub">' + age(s.createdAt) + ' · ' + link + '</div></div>' +
+        '<button class="btn-sm btn-stop" onclick="stop(\\'' + s.sandboxId + '\\', this)">Stop</button>' +
+        '</div>'
+    }).join('')
+  } catch (e) {
+    status.textContent = ''
+    list.innerHTML = '<p class="muted">Could not load sandboxes: ' + (e.message || e) + '</p>'
+  }
+}
+
+async function stop(id, btn) {
+  if (!confirm('Stop and delete sandbox ' + short(id) + '? This cannot be undone.')) return
+  btn.disabled = true
+  btn.textContent = 'Stopping...'
+  try {
+    const r = await fetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandboxId: id }) })
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error || 'Stop failed')
+    refresh()
+  } catch (e) {
+    alert('Error stopping sandbox: ' + (e.message || e))
+    btn.disabled = false
+    btn.textContent = 'Stop'
+  }
+}
+
+refresh()
 </script>
 </div>
 </body>
