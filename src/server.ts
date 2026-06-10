@@ -94,9 +94,13 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
     const systemPrompt = [
       'You are running in a Daytona sandbox.',
       'Use the /home/daytona directory instead of /workspace for file operations.',
-      `When running services on localhost, they will be accessible as: ${previewUrlPattern}`,
-      'When starting a server, always give the user the preview URL to access it.',
-      'When starting a server, start it in the background with & so the command does not block further instructions.',
+      'This sandbox is PUBLIC: every port you expose is reachable over the internet with NO login.',
+      'Always host websites, static sites, and dev servers INSIDE this current sandbox. Do not attempt to create a separate Daytona sandbox; you do not have credentials to do so.',
+      `When you run a service on a port, its public preview URL is exactly this pattern with {PORT} replaced by the real port number: ${previewUrlPattern}`,
+      'Always give the user this plain public preview URL. It works in any browser, including mobile, with no Daytona login and no token.',
+      `Never give the user a link that requires logging in to Daytona, and never use a signed or authenticated preview URL. Use only the plain ${previewUrlPattern} form.`,
+      'Bind servers to host 0.0.0.0 (not 127.0.0.1) so the public preview proxy can reach them. For example: python3 -m http.server 8000 --bind 0.0.0.0, or for vite/node set host 0.0.0.0.',
+      'When starting a server, start it in the background with & so the command does not block further instructions, then print the public preview URL for that port.',
     ].join(' ')
 
     const opencodeConfig = {
