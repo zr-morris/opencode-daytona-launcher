@@ -37,6 +37,7 @@ const SANDBOX_CPU = 1
 const SANDBOX_MEM = 2 // GiB
 const SANDBOX_DISK = 5 // GiB
 const RUNNING_STATES = new Set(['started', 'starting', 'running'])
+const DEFAULT_IDLE_MINUTES = parseInt(process.env.DEFAULT_IDLE_MINUTES || '30', 10)
 
 const daytonaApiKey = process.env.DAYTONA_API_KEY
 if (!daytonaApiKey) {
@@ -200,6 +201,51 @@ app.post('/api/stop', async (req: Request, res: Response) => {
   }
 })
 
+// --- Bulk-stop launcher sandboxes that have been idle past a threshold ---
+// Idle = running AND lastActivityAt older than idleMinutes (default 30).
+// Only ever touches sandboxes labeled app=opencode-launcher.
+app.post('/api/stop-idle', async (req: Request, res: Response) => {
+  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+  const idleMinutes = Math.max(
+    1,
+    parseInt(String((req.body && req.body.idleMinutes) ?? DEFAULT_IDLE_MINUTES), 10) || DEFAULT_IDLE_MINUTES,
+  )
+  const cutoff = Date.now() - idleMinutes * 60_000
+  const TERMINAL = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
+  try {
+    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const candidates: { id: string; idleMin: number }[] = []
+    const kept: { id: string; reason: string }[] = []
+    for await (const sb of daytona.list({ labels: { app: APP_LABEL } } as any)) {
+      const id = (sb as any).id ?? (sb as any).sandboxId
+      const state = String((sb as any).state ?? 'unknown')
+      if (TERMINAL.has(state)) continue
+      if (!RUNNING_STATES.has(state)) { kept.push({ id, reason: 'not running' }); continue }
+      const laRaw = (sb as any).lastActivityAt
+      const la = laRaw ? new Date(laRaw).getTime() : null
+      if (la == null) { kept.push({ id, reason: 'no lastActivityAt' }); continue }
+      const idleMin = Math.round((Date.now() - la) / 60_000)
+      if (la <= cutoff) candidates.push({ id, idleMin })
+      else kept.push({ id, reason: 'active (' + idleMin + 'm idle)' })
+    }
+    const stopped: string[] = []
+    const failed: { id: string; error: string }[] = []
+    for (const c of candidates) {
+      try {
+        const sb = await (daytona as any).get(c.id)
+        if (sb) await sb.delete()
+        sandboxes.delete(c.id)
+        stopped.push(c.id)
+      } catch (e: any) {
+        failed.push({ id: c.id, error: String(e?.message || e) })
+      }
+    }
+    return res.json({ ok: true, idleMinutes, stoppedCount: stopped.length, stopped, kept, failed })
+  } catch (err: any) {
+    return res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
 // --- List sandboxes created by this launcher (live from Daytona, scoped by label) ---
 app.get('/api/sandboxes', async (_req: Request, res: Response) => {
   if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
@@ -330,6 +376,7 @@ const LANDING_HTML = `<!DOCTYPE html>
   .row .url:hover { text-decoration: underline; }
   .row .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
   .btn-copy { background: transparent; color: #7cc5ff; border: 1px solid #2a3a48; }
+  .btn-warn { background: transparent; color: #ffc857; border: 1px solid #4a3a1f; }
   .copied { color: #3ddc84 !important; border-color: #2a4a32 !important; }
   /* ---- dashboard ---- */
   .dash { margin: 20px 0 8px; }
@@ -403,6 +450,7 @@ const LANDING_HTML = `<!DOCTYPE html>
   <h2>Active OpenCode sandboxes</h2>
   <div class="bar" style="margin-bottom: 12px">
     <button class="btn-sm btn-ghost" onclick="refreshAll()">Refresh</button>
+    <button id="stopIdleBtn" class="btn-sm btn-warn" onclick="stopIdle()">Stop all idle</button>
     <span id="listStatus" class="muted"></span>
   </div>
   <div id="list"></div>
@@ -548,6 +596,30 @@ async function stop(id, btn) {
     alert('Error stopping sandbox: ' + (e.message || e))
     btn.disabled = false
     btn.textContent = 'Stop'
+  }
+}
+
+var IDLE_MINUTES = 30
+async function stopIdle() {
+  var btn = document.getElementById('stopIdleBtn')
+  if (!confirm('Stop and DELETE all OpenCode sandboxes idle for more than ' + IDLE_MINUTES + ' minutes?\\n\\nThis frees quota and cannot be undone. Active sandboxes are left running.')) return
+  btn.disabled = true
+  var prev = btn.textContent
+  btn.textContent = 'Stopping idle...'
+  try {
+    var r = await fetch('/api/stop-idle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idleMinutes: IDLE_MINUTES }) })
+    var d = await r.json()
+    if (!r.ok) throw new Error(d.error || 'Stop-idle failed')
+    var n = d.stoppedCount || 0
+    var msg = n === 0 ? 'No idle sandboxes to stop (nothing idle > ' + IDLE_MINUTES + 'm).' : ('Stopped ' + n + ' idle sandbox' + (n === 1 ? '' : 'es') + '.')
+    if (d.failed && d.failed.length) msg += ' ' + d.failed.length + ' failed.'
+    alert(msg)
+  } catch (e) {
+    alert('Error: ' + (e.message || e))
+  } finally {
+    btn.disabled = false
+    btn.textContent = prev
+    refreshAll()
   }
 }
 
