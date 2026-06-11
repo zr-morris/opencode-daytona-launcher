@@ -1089,8 +1089,12 @@ async function loadAccount() {
     var lo = document.getElementById('logoutBtn'); if (lo) lo.style.display = ''
   }
   if (ACCOUNT.githubAuto) {
+    // GitHub is auto-connected by the login — hide the PAT card, show green.
     var card = document.getElementById('card-github'); if (card) card.classList.add('hide')
     setChip('github', true)
+    setBadge('github', 'on', 'Connected via login')
+    // If a stale PAT was saved before login was enabled, clear it to avoid confusion.
+    if (lsGet(LS.githubToken)) lsSet(LS.githubToken, '')
   }
 }
 async function logout() {
@@ -1225,6 +1229,13 @@ function disconnect(p) {
 // except we re-validate to fetch details like github login / linear teams).
 async function hydrateDrawer() {
   for (var p in INTG) {
+    // GitHub auto-provisioned by the login gate: mark connected-via-login and
+    // skip the PAT path entirely (the card is hidden in loadAccount).
+    if (p === 'github' && ACCOUNT.githubAuto) {
+      setBadge('github', 'on', 'Connected via login')
+      setChip('github', true)
+      continue
+    }
     var key = lsGet(INTG[p].ls)
     if (!key) { setBadge(p, 'off'); setChip(p, false); showEdit(p); continue }
     setBadge(p, 'off', 'Checking...')
