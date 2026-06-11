@@ -9,10 +9,10 @@ This is a small, **stateless, bring-your-own-keys (BYOK)** Express app designed 
 be trivially self-hosted on Render's free tier. You enter your own API keys in the
 UI; the server never stores them.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/zr-morris/opencode-daytona-launcher)
-
-> **Zero-config deploy:** no environment variables are required. Deploy it, open
-> the URL, paste your Daytona key, and go.
+> **Deploy your own copy in minutes.** Fork this repo, connect _your_ fork to
+> _your own_ Render account, and you're done — no environment variables required,
+> because every user enters their own keys in the UI. See
+> [Deploy to Render](#deploy-to-render-fork-first) below.
 
 ---
 
@@ -59,27 +59,41 @@ Daytona sandbox  →  installs OpenCode  →  `opencode web`  →  public previe
 
 ---
 
-## Deploy to Render (recommended)
+## Deploy to Render (fork first)
 
-You have two easy paths:
+> **Important — deploy from _your own_ fork, not someone else's repo.** This app
+> is meant to be self-hosted. Always fork it into your own GitHub account and
+> connect _your_ fork to _your_ Render account. There is intentionally **no
+> "one-click deploy from this repo" button**: a shared deploy link would couple
+> your service to a repo you don't control and blur ownership of the instance.
 
-### A) One-click Blueprint
-1. Click the **Deploy to Render** button above.
-2. Render reads [`render.yaml`](./render.yaml) and creates a free web service.
-3. No environment variables are needed — open the service URL when it's live.
+### 1. Fork this repo
+Click **Fork** at the top of the GitHub page to copy it into your own account
+(e.g. `your-username/opencode-daytona-launcher`).
 
-### B) Manual web service
-1. Fork/clone this repo to your own GitHub.
-2. In Render: **New → Web Service**, connect the repo.
-3. Settings:
-   - **Runtime:** Node
-   - **Build Command:** `npm install && npm run build`
-   - **Start Command:** `npm start`
-   - **Health Check Path:** `/healthz`
-4. Deploy. Open the URL, paste your Daytona key in the onboarding screen.
+### 2. Create a Render web service from your fork
+In the [Render dashboard](https://dashboard.render.com): **New → Web Service**,
+then connect **your fork**. Render will detect [`render.yaml`](./render.yaml) (a
+free, zero-env Blueprint). If you create the service manually instead, use:
+
+- **Runtime:** Node
+- **Build Command:** `npm install && npm run build`
+- **Start Command:** `npm start`
+- **Health Check Path:** `/healthz`
+
+### 3. Open the URL and add your keys
+No environment variables are required. When the service is live, open its URL and
+paste your **Daytona** key in the onboarding screen. Add GitHub / Linear / Render
+in **Settings** as needed. Your keys live in your browser, not on the server.
 
 > **Heads-up (Render free tier):** free web services sleep after inactivity, so the
 > first request after idle takes a few extra seconds to wake.
+
+> **Who can use your instance?** Because keys are entered per-browser (BYOK), the
+> _server_ holds no secrets — but anyone who can open your URL can use the app with
+> _their own_ keys, and (see [Security model](#security-model)) `localStorage` is
+> not isolation between untrusted users. Keep your instance to people you trust, or
+> put it behind your own auth/VPN if you expose it more widely.
 
 ---
 
@@ -122,7 +136,8 @@ concurrently — the dashboard shows exactly how many "slots" remain.
 ## Local development
 
 ```bash
-git clone https://github.com/zr-morris/opencode-daytona-launcher.git
+# Clone your fork (replace YOUR-USERNAME), or the canonical repo to try it out.
+git clone https://github.com/YOUR-USERNAME/opencode-daytona-launcher.git
 cd opencode-daytona-launcher
 npm install
 npm run build
