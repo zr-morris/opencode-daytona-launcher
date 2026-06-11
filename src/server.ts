@@ -25,6 +25,19 @@ const DAYTONA_TARGET = process.env.DAYTONA_TARGET || 'us'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20'
 const APP_LABEL = 'opencode-launcher' // label so we only list/stop sandboxes we created
 
+// Daytona Tier 1 (free, email-verified) shared resource pool.
+// Source: https://www.daytona.io/docs/en/limits  (10 vCPU / 10 GiB / 30 GiB)
+// Overridable via env in case the account is on a higher tier.
+const TIER_CPU = parseInt(process.env.TIER_CPU || '10', 10)
+const TIER_MEM = parseInt(process.env.TIER_MEM || '10', 10) // GiB
+const TIER_DISK = parseInt(process.env.TIER_DISK || '30', 10) // GiB
+const TIER_NAME = process.env.TIER_NAME || 'Free (Tier 1)'
+// Per-sandbox footprint this launcher requests (must match daytona.create below).
+const SANDBOX_CPU = 1
+const SANDBOX_MEM = 2 // GiB
+const SANDBOX_DISK = 5 // GiB
+const RUNNING_STATES = new Set(['started', 'starting', 'running'])
+
 const daytonaApiKey = process.env.DAYTONA_API_KEY
 if (!daytonaApiKey) {
   console.error('FATAL: DAYTONA_API_KEY is not set. Set it in the Render service environment.')
@@ -207,12 +220,75 @@ app.get('/api/sandboxes', async (_req: Request, res: Response) => {
         state,
         public: (sb as any).public ?? null,
         createdAt: (sb as any).createdAt ?? null,
+        lastActivityAt: (sb as any).lastActivityAt ?? null,
+        cpu: Number((sb as any).cpu ?? 0),
+        memory: Number((sb as any).memory ?? 0),
+        disk: Number((sb as any).disk ?? 0),
+        running: RUNNING_STATES.has(String(state)),
         url,
       })
     }
     // newest first
     out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     res.json({ count: out.length, sandboxes: out })
+  } catch (err: any) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+// --- Account-wide resource usage vs the free-tier pool (for the dashboard) ---
+// Every RUNNING sandbox on the account (any label) counts against the shared
+// CPU/memory pool, so we aggregate the whole account, then break out how much
+// this launcher specifically is using.
+app.get('/api/usage', async (_req: Request, res: Response) => {
+  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+  try {
+    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const TERMINAL = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
+    let total = 0, running = 0, stopped = 0, launcherTotal = 0, launcherRunning = 0
+    let usedCpu = 0, usedMem = 0, usedDisk = 0
+    let launcherCpu = 0, launcherMem = 0
+    const byState: Record<string, number> = {}
+    for await (const sb of daytona.list()) {
+      const state = String((sb as any).state ?? 'unknown')
+      if (TERMINAL.has(state)) continue
+      total++
+      byState[state] = (byState[state] || 0) + 1
+      const isRunning = RUNNING_STATES.has(state)
+      const cpu = Number((sb as any).cpu ?? 0)
+      const mem = Number((sb as any).memory ?? 0)
+      const disk = Number((sb as any).disk ?? 0)
+      const isLauncher = ((sb as any).labels && (sb as any).labels.app) === APP_LABEL
+      if (isLauncher) launcherTotal++
+      if (isRunning) {
+        running++
+        usedCpu += cpu
+        usedMem += mem
+        if (isLauncher) { launcherRunning++; launcherCpu += cpu; launcherMem += mem }
+      } else {
+        stopped++
+      }
+      // Disk persists for any non-archived sandbox (running or stopped).
+      usedDisk += disk
+    }
+    // How many MORE launcher sandboxes (1cpu/2gib/5disk) fit in remaining pool.
+    const freeCpu = Math.max(0, TIER_CPU - usedCpu)
+    const freeMem = Math.max(0, TIER_MEM - usedMem)
+    const freeDisk = Math.max(0, TIER_DISK - usedDisk)
+    const slotsRemaining = Math.max(0, Math.min(
+      Math.floor(freeCpu / SANDBOX_CPU),
+      Math.floor(freeMem / SANDBOX_MEM),
+      Math.floor(freeDisk / SANDBOX_DISK),
+    ))
+    res.json({
+      tier: { name: TIER_NAME, cpu: TIER_CPU, memory: TIER_MEM, disk: TIER_DISK },
+      perSandbox: { cpu: SANDBOX_CPU, memory: SANDBOX_MEM, disk: SANDBOX_DISK },
+      used: { cpu: usedCpu, memory: usedMem, disk: usedDisk },
+      free: { cpu: freeCpu, memory: freeMem, disk: freeDisk },
+      counts: { total, running, stopped, launcherTotal, launcherRunning, byState },
+      launcherUsed: { cpu: launcherCpu, memory: launcherMem },
+      slotsRemaining,
+    })
   } catch (err: any) {
     res.status(500).json({ error: String(err?.message || err) })
   }
@@ -232,7 +308,7 @@ const LANDING_HTML = `<!DOCTYPE html>
 <style>
   :root { color-scheme: dark; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; padding: 20px; }
-  .card { width: 100%; max-width: 680px; padding: 32px; border: 1px solid #222; border-radius: 12px; background: #111418; }
+  .card { width: 100%; max-width: 860px; padding: 32px; border: 1px solid #222; border-radius: 12px; background: #111418; }
   h1 { margin: 0 0 8px; font-size: 22px; }
   h2 { font-size: 14px; color: #9a9a9a; margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 0.05em; }
   p { color: #aaa; line-height: 1.5; }
@@ -255,20 +331,78 @@ const LANDING_HTML = `<!DOCTYPE html>
   .row .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
   .btn-copy { background: transparent; color: #7cc5ff; border: 1px solid #2a3a48; }
   .copied { color: #3ddc84 !important; border-color: #2a4a32 !important; }
+  /* ---- dashboard ---- */
+  .dash { margin: 20px 0 8px; }
+  .hero { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .hero .big { font-size: 34px; font-weight: 800; line-height: 1; }
+  .hero .big.ok { color: #3ddc84; } .hero .big.warn { color: #ffc857; } .hero .big.full { color: #ff5c5c; }
+  .hero .lbl { color: #9a9a9a; font-size: 13px; }
+  .tierTag { font-size: 10px; padding: 3px 8px; border-radius: 10px; background: #14241c; color: #3ddc84; border: 1px solid #234; letter-spacing: .04em; }
+  .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 620px) { .gauges { grid-template-columns: 1fr; } }
+  .gauge { padding: 14px; border: 1px solid #222; border-radius: 10px; background: #0d1115; }
+  .gauge .gtop { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .gauge .gname { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #9a9a9a; }
+  .gauge .gval { font-size: 13px; color: #ddd; } .gauge .gval b { color: #fff; }
+  .track { height: 10px; border-radius: 6px; background: #1a2027; overflow: hidden; }
+  .fill { height: 100%; width: 0%; border-radius: 6px; transition: width .5s ease, background .3s ease; }
+  .fill.ok { background: linear-gradient(90deg,#2fb96b,#3ddc84); }
+  .fill.warn { background: linear-gradient(90deg,#e0a83a,#ffc857); }
+  .fill.full { background: linear-gradient(90deg,#d6453f,#ff6b6b); }
+  .gauge .gpct { font-size: 11px; color: #808080; margin-top: 6px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
+  @media (max-width: 620px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { padding: 12px 14px; border: 1px solid #222; border-radius: 10px; background: #0d1115; text-align: center; }
+  .stat .n { font-size: 24px; font-weight: 800; color: #fff; } .stat .k { font-size: 11px; color: #909090; margin-top: 2px; }
+  .res { display: inline-flex; gap: 8px; font-size: 10px; color: #8aa; margin-top: 4px; }
+  .res span { background: #121a20; border: 1px solid #1f2a32; padding: 1px 6px; border-radius: 6px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dot.run { background: #3ddc84; } .dot.stop { background: #ffc857; } .dot.other { background: #6a7886; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>OpenCode on Daytona</h1>
-  <p>This backend launches the <strong>OpenCode</strong> AI coding agent inside an on-demand <strong>Daytona</strong> sandbox and gives you a preview link to the OpenCode Web interface. Launch as many as you like &mdash; each running sandbox gets its own link in the list below.</p>
+  <h1>OpenCode on Daytona <span id="tierTag" class="tierTag">free tier</span></h1>
+  <p>Launch the <strong>OpenCode</strong> AI coding agent inside on-demand <strong>Daytona</strong> sandboxes. Each running sandbox gets its own preview link &mdash; the dashboard below shows how much of your free-tier quota is in use.</p>
   <div class="bar">
     <button id="go" onclick="launch()">Launch OpenCode Web</button>
+    <span id="slotsHint" class="muted"></span>
   </div>
   <div id="out"></div>
 
-  <h2>Active sandboxes</h2>
+  <div class="dash">
+    <div class="hero">
+      <span id="slotsBig" class="big ok">&middot;</span>
+      <span class="lbl" id="slotsLbl">more instances fit in your free-tier quota</span>
+    </div>
+    <div class="gauges">
+      <div class="gauge">
+        <div class="gtop"><span class="gname">vCPU</span><span class="gval"><b id="cpuUsed">-</b> / <span id="cpuMax">-</span></span></div>
+        <div class="track"><div id="cpuFill" class="fill ok"></div></div>
+        <div class="gpct" id="cpuPct"></div>
+      </div>
+      <div class="gauge">
+        <div class="gtop"><span class="gname">Memory</span><span class="gval"><b id="memUsed">-</b> / <span id="memMax">-</span> GiB</span></div>
+        <div class="track"><div id="memFill" class="fill ok"></div></div>
+        <div class="gpct" id="memPct"></div>
+      </div>
+      <div class="gauge">
+        <div class="gtop"><span class="gname">Disk</span><span class="gval"><b id="diskUsed">-</b> / <span id="diskMax">-</span> GiB</span></div>
+        <div class="track"><div id="diskFill" class="fill ok"></div></div>
+        <div class="gpct" id="diskPct"></div>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n" id="stTotal">-</div><div class="k">Total sandboxes</div></div>
+      <div class="stat"><div class="n" id="stRunning">-</div><div class="k"><span class="dot run"></span>Running</div></div>
+      <div class="stat"><div class="n" id="stStopped">-</div><div class="k"><span class="dot stop"></span>Stopped</div></div>
+      <div class="stat"><div class="n" id="stLauncher">-</div><div class="k">OpenCode (this app)</div></div>
+    </div>
+  </div>
+
+  <h2>Active OpenCode sandboxes</h2>
   <div class="bar" style="margin-bottom: 12px">
-    <button class="btn-sm btn-ghost" onclick="refresh()">Refresh</button>
+    <button class="btn-sm btn-ghost" onclick="refreshAll()">Refresh</button>
     <span id="listStatus" class="muted"></span>
   </div>
   <div id="list"></div>
@@ -285,9 +419,9 @@ async function launch() {
     const r = await fetch('/api/launch', { method: 'POST' })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Launch failed')
-    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + '<br><br><span class="muted">All your running instances and their links are listed below under <b>Active sandboxes</b>.</span>'
+    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + '<br><br><span class="muted">All your running instances and their links are listed below under <b>Active OpenCode sandboxes</b>.</span>'
     btn.textContent = 'Launch another'
-    refresh()
+    refreshAll()
   } catch (e) {
     out.textContent = 'Error: ' + (e.message || e)
     btn.textContent = 'Try again'
@@ -303,6 +437,58 @@ function age(iso) {
   if (s < 60) return Math.floor(s) + 's ago'
   if (s < 3600) return Math.floor(s / 60) + 'm ago'
   return Math.floor(s / 3600) + 'h ago'
+}
+
+function level(pct) { return pct >= 90 ? 'full' : (pct >= 70 ? 'warn' : 'ok') }
+
+function paintGauge(prefix, used, max, unit) {
+  var pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0
+  var lvl = level(pct)
+  document.getElementById(prefix + 'Used').textContent = used
+  document.getElementById(prefix + 'Max').textContent = max
+  var fill = document.getElementById(prefix + 'Fill')
+  fill.style.width = pct + '%'
+  fill.className = 'fill ' + lvl
+  document.getElementById(prefix + 'Pct').textContent = pct + '% used  \\u00b7  ' + Math.max(0, max - used) + ' ' + unit + ' free'
+}
+
+async function loadUsage() {
+  try {
+    const r = await fetch('/api/usage')
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error || 'usage failed')
+
+    // tier tag
+    document.getElementById('tierTag').textContent = d.tier.name
+
+    // slots headline
+    var slots = d.slotsRemaining
+    var big = document.getElementById('slotsBig')
+    big.textContent = slots
+    big.className = 'big ' + (slots === 0 ? 'full' : (slots <= 1 ? 'warn' : 'ok'))
+    var lbl = document.getElementById('slotsLbl')
+    lbl.textContent = (slots === 1 ? 'more instance fits' : 'more instances fit') +
+      ' in your ' + d.tier.name + ' quota (' + d.perSandbox.cpu + ' vCPU / ' + d.perSandbox.memory + ' GiB each)'
+    var hint = document.getElementById('slotsHint')
+    hint.textContent = slots > 0 ? ('room for ' + slots + ' more') : 'quota full \\u2014 stop one to free space'
+
+    // gauges
+    paintGauge('cpu', d.used.cpu, d.tier.cpu, 'vCPU')
+    paintGauge('mem', d.used.memory, d.tier.memory, 'GiB')
+    paintGauge('disk', d.used.disk, d.tier.disk, 'GiB')
+
+    // stat cards
+    document.getElementById('stTotal').textContent = d.counts.total
+    document.getElementById('stRunning').textContent = d.counts.running
+    document.getElementById('stStopped').textContent = d.counts.stopped
+    document.getElementById('stLauncher').textContent = d.counts.launcherTotal
+  } catch (e) {
+    document.getElementById('slotsLbl').textContent = 'Could not load quota: ' + (e.message || e)
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([loadUsage(), refresh()])
 }
 
 async function refresh() {
@@ -326,10 +512,17 @@ async function refresh() {
       var copyBtn = s.url
         ? '<button class="btn-sm btn-copy" onclick="copyUrl(this, \\'' + s.url + '\\')">Copy link</button>'
         : ''
+      var dotClass = s.running ? 'run' : (String(s.state) === 'stopped' ? 'stop' : 'other')
+      var resChips = '<span class="res">' +
+        '<span>' + (s.cpu || 0) + ' vCPU</span>' +
+        '<span>' + (s.memory || 0) + ' GiB</span>' +
+        '<span>' + (s.disk || 0) + ' GiB disk</span>' +
+        '</span>'
       return '<div class="row">' +
         '<div class="meta">' +
-          '<div class="id">' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
+          '<div class="id"><span class="dot ' + dotClass + '"></span>' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
           urlBlock +
+          '<div>' + resChips + '</div>' +
         '</div>' +
         '<div class="actions">' + copyBtn +
           '<button class="btn-sm btn-stop" onclick="stop(\\'' + s.sandboxId + '\\', this)">Stop</button>' +
@@ -350,7 +543,7 @@ async function stop(id, btn) {
     const r = await fetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandboxId: id }) })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop failed')
-    refresh()
+    refreshAll()
   } catch (e) {
     alert('Error stopping sandbox: ' + (e.message || e))
     btn.disabled = false
@@ -372,7 +565,9 @@ function copyUrl(btn, url) {
   }
 }
 
-refresh()
+refreshAll()
+// Auto-refresh the dashboard + list every 15s.
+setInterval(refreshAll, 15000)
 </script>
 </div>
 </body>
