@@ -11,8 +11,9 @@
  *  - PORT (injected by Render)
  */
 
-import express, { Request, Response } from 'express'
+import express, { NextFunction, Request, Response } from 'express'
 import { Daytona, Sandbox } from '@daytona/sdk'
+import crypto from 'node:crypto'
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
 const OPENCODE_PORT = 3000
@@ -38,6 +39,118 @@ const SANDBOX_MEM = 2 // GiB
 const SANDBOX_DISK = 5 // GiB
 const RUNNING_STATES = new Set(['started', 'starting', 'running'])
 const DEFAULT_IDLE_MINUTES = parseInt(process.env.DEFAULT_IDLE_MINUTES || '30', 10)
+
+// ---------------------------------------------------------------------------
+// Optional GitHub OAuth login gate.
+//
+// When GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET are set, the whole app (page +
+// every /api route) requires a GitHub login. The login also auto-provisions the
+// user's GitHub integration: the OAuth access token (repo scope) is kept in the
+// signed session and injected into sandboxes, so no separate PAT is needed.
+//
+// When those env vars are absent, login is DISABLED and the app behaves exactly
+// as the open BYOK version (good for local dev / trusted networks).
+//
+// Sessions are stateless: a signed (HMAC-SHA256) httpOnly cookie carrying the
+// GitHub login + token + expiry. No session store needed (free-tier friendly).
+// ---------------------------------------------------------------------------
+const GH_CLIENT_ID = process.env.GITHUB_CLIENT_ID || ''
+const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || ''
+const AUTH_ENABLED = Boolean(GH_CLIENT_ID && GH_CLIENT_SECRET)
+// Cookie signing secret. Falls back to a random per-boot secret (sessions reset
+// on restart) so it works even if the operator forgets to set SESSION_SECRET.
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+const SESSION_COOKIE = 'ocdl_session'
+const OAUTH_STATE_COOKIE = 'ocdl_oauth_state'
+// Allowlist: only these GitHub usernames and/or members of this org may log in.
+const ALLOWED_USERS = (process.env.ALLOWED_GITHUB_USERS || '')
+  .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+const ALLOWED_ORG = (process.env.ALLOWED_GITHUB_ORG || '').trim()
+
+interface Session { login: string; name?: string; avatar?: string; ghToken: string; exp: number }
+
+function b64url(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+function b64urlDecode(str: string): Buffer {
+  return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+}
+function signSession(sess: Session): string {
+  const payload = b64url(Buffer.from(JSON.stringify(sess)))
+  const sig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest())
+  return payload + '.' + sig
+}
+function verifySession(token: string): Session | null {
+  if (!token || token.indexOf('.') === -1) return null
+  const [payload, sig] = token.split('.')
+  const expected = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest())
+  // constant-time compare
+  const a = Buffer.from(sig || ''); const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+  try {
+    const sess = JSON.parse(b64urlDecode(payload).toString()) as Session
+    if (!sess.exp || sess.exp < Date.now()) return null
+    return sess
+  } catch { return null }
+}
+function parseCookies(req: Request): Record<string, string> {
+  const out: Record<string, string> = {}
+  const raw = req.headers.cookie
+  if (!raw) return out
+  raw.split(';').forEach((p) => {
+    const idx = p.indexOf('=')
+    if (idx > -1) out[p.slice(0, idx).trim()] = decodeURIComponent(p.slice(idx + 1).trim())
+  })
+  return out
+}
+function getSession(req: Request): Session | null {
+  if (!AUTH_ENABLED) return null
+  return verifySession(parseCookies(req)[SESSION_COOKIE] || '')
+}
+function setSessionCookie(res: Response, token: string) {
+  res.setHeader('Set-Cookie',
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`)
+}
+function clearSessionCookie(res: Response) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`)
+}
+
+// Verify a logged-in GitHub user is allowed (username allowlist OR org membership).
+// If no allowlist is configured, ANY GitHub user is allowed (warned in UI/docs).
+async function isUserAllowed(login: string, token: string): Promise<boolean> {
+  if (!ALLOWED_USERS.length && !ALLOWED_ORG) return true
+  if (ALLOWED_USERS.includes(login.toLowerCase())) return true
+  if (ALLOWED_ORG) {
+    try {
+      const r = await fetch(`https://api.github.com/orgs/${ALLOWED_ORG}/members/${login}`, {
+        headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'opencode-daytona-launcher', Accept: 'application/vnd.github+json' },
+      })
+      // 204 = is a member; 302/404 = not a member / not visible
+      if (r.status === 204) return true
+    } catch {}
+  }
+  return false
+}
+
+// Middleware: require a valid session for protected routes when AUTH is enabled.
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (!AUTH_ENABLED) return next()
+  const sess = getSession(req)
+  if (sess) { (req as any).session = sess; return next() }
+  // API routes get JSON 401; page routes redirect to /login.
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Login required', loginRequired: true })
+  return res.redirect('/login')
+}
+
+// Compute this deployment's external base URL (honors proxy headers on Render).
+function baseUrl(req: Request): string {
+  const envBase = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '')
+  if (envBase) return envBase
+  const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https'
+  const host = (req.headers['x-forwarded-host'] as string) || req.headers.host
+  return `${proto}://${host}`
+}
 
 // ---------------------------------------------------------------------------
 // BYOK credential model (stateless server).
@@ -96,6 +209,93 @@ const sandboxes = new Map<string, { url: string; createdAt: string }>()
 const app = express()
 app.use(express.json())
 
+// ---- Auth status endpoint (always available; tells the UI whether to show login) ----
+app.get('/api/me', (req: Request, res: Response) => {
+  if (!AUTH_ENABLED) return res.json({ authEnabled: false, authed: true })
+  const sess = getSession(req)
+  if (!sess) return res.json({ authEnabled: true, authed: false })
+  return res.json({
+    authEnabled: true, authed: true,
+    login: sess.login, name: sess.name, avatar: sess.avatar,
+    // Tells the UI that GitHub is auto-connected via login (hide the PAT card).
+    githubAuto: true,
+  })
+})
+
+// ---- GitHub OAuth: login page ----
+app.get('/login', (req: Request, res: Response) => {
+  if (!AUTH_ENABLED) return res.redirect('/')
+  if (getSession(req)) return res.redirect('/')
+  const err = typeof req.query.error === 'string' ? req.query.error : ''
+  res.type('html').send(loginPage(err))
+})
+
+// ---- GitHub OAuth: start (redirect to GitHub consent) ----
+app.get('/auth/github', (req: Request, res: Response) => {
+  if (!AUTH_ENABLED) return res.redirect('/')
+  const state = b64url(crypto.randomBytes(16))
+  // store state in a short-lived cookie to defend against CSRF
+  res.setHeader('Set-Cookie', `${OAUTH_STATE_COOKIE}=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`)
+  const redirectUri = `${baseUrl(req)}/auth/github/callback`
+  const url = new URL('https://github.com/login/oauth/authorize')
+  url.searchParams.set('client_id', GH_CLIENT_ID)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('scope', 'read:user repo') // repo => login token can push code
+  url.searchParams.set('state', state)
+  url.searchParams.set('allow_signup', 'false')
+  res.redirect(url.toString())
+})
+
+// ---- GitHub OAuth: callback ----
+app.get('/auth/github/callback', async (req: Request, res: Response) => {
+  if (!AUTH_ENABLED) return res.redirect('/')
+  const code = typeof req.query.code === 'string' ? req.query.code : ''
+  const state = typeof req.query.state === 'string' ? req.query.state : ''
+  const cookieState = parseCookies(req)[OAUTH_STATE_COOKIE] || ''
+  if (!code || !state || state !== cookieState) {
+    return res.redirect('/login?error=' + encodeURIComponent('Login failed (bad state). Please try again.'))
+  }
+  try {
+    const tokenResp = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: GH_CLIENT_ID,
+        client_secret: GH_CLIENT_SECRET,
+        code,
+        redirect_uri: `${baseUrl(req)}/auth/github/callback`,
+      }),
+    })
+    const tok: any = await tokenResp.json()
+    const ghToken = tok.access_token
+    if (!ghToken) return res.redirect('/login?error=' + encodeURIComponent('GitHub did not return a token.'))
+    // fetch the user
+    const uResp = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${ghToken}`, 'User-Agent': 'opencode-daytona-launcher', Accept: 'application/vnd.github+json' },
+    })
+    if (!uResp.ok) return res.redirect('/login?error=' + encodeURIComponent('Could not read your GitHub profile.'))
+    const u: any = await uResp.json()
+    const login = String(u.login || '')
+    const allowed = await isUserAllowed(login, ghToken)
+    if (!allowed) {
+      return res.redirect('/login?error=' + encodeURIComponent('@' + login + ' is not authorized to use this instance.'))
+    }
+    const sess: Session = { login, name: u.name || undefined, avatar: u.avatar_url || undefined, ghToken, exp: Date.now() + SESSION_TTL_MS }
+    setSessionCookie(res, signSession(sess))
+    // clear the state cookie
+    res.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`)
+    console.log('[auth] login ok: @%s', login)
+    return res.redirect('/')
+  } catch (err: any) {
+    return res.redirect('/login?error=' + encodeURIComponent('Login error: ' + String(err?.message || err)))
+  }
+})
+
+// ---- Logout ----
+app.post('/auth/logout', (_req: Request, res: Response) => { clearSessionCookie(res); res.json({ ok: true }) })
+app.get('/auth/logout', (_req: Request, res: Response) => { clearSessionCookie(res); res.redirect('/login') })
+
+
 // --- Health check ---
 app.get('/healthz', (_req: Request, res: Response) => {
   res.json({
@@ -116,12 +316,12 @@ app.get('/healthz', (_req: Request, res: Response) => {
 })
 
 // --- Landing page ---
-app.get('/', (_req: Request, res: Response) => {
+app.get('/', requireAuth, (_req: Request, res: Response) => {
   res.type('html').send(LANDING_HTML)
 })
 
 // --- Launch a new OpenCode Web sandbox ---
-app.post('/api/launch', async (req: Request, res: Response) => {
+app.post('/api/launch', requireAuth, async (req: Request, res: Response) => {
   const creds = getCreds(req)
   if (!creds.daytonaKey) {
     return res.status(400).json({ error: NO_KEY_MSG })
@@ -137,7 +337,11 @@ app.post('/api/launch', async (req: Request, res: Response) => {
     const envVars: Record<string, string> = {}
     if (process.env.OPENAI_API_KEY) envVars.OPENAI_API_KEY = process.env.OPENAI_API_KEY
     // Inject the user's BYOK integration creds so OpenCode can use them.
-    if (creds.githubToken) { envVars.GH_TOKEN = creds.githubToken; envVars.GITHUB_TOKEN = creds.githubToken }
+    // GitHub: prefer the logged-in user's OAuth token (auto-provisioned via the
+    // GitHub login gate) so no separate PAT is needed; fall back to a header/env.
+    const sessForLaunch = getSession(req)
+    const ghForSandbox = (sessForLaunch && sessForLaunch.ghToken) || creds.githubToken
+    if (ghForSandbox) { envVars.GH_TOKEN = ghForSandbox; envVars.GITHUB_TOKEN = ghForSandbox }
     if (creds.linearKey) envVars.LINEAR_API_KEY = creds.linearKey
     if (creds.linearTeam) envVars.LINEAR_TEAM_ID = creds.linearTeam
     if (creds.renderKey) envVars.RENDER_API_KEY = creds.renderKey
@@ -212,8 +416,8 @@ app.post('/api/launch', async (req: Request, res: Response) => {
     // can clone/push over HTTPS without prompting. The token is written to
     // ~/.git-credentials (chmod 600). Passed via base64 so it never appears in
     // the command line or logs.
-    if (creds.githubToken) {
-      const ghLine = `https://x-access-token:${creds.githubToken}@github.com`
+    if (ghForSandbox) {
+      const ghLine = `https://x-access-token:${ghForSandbox}@github.com`
       const ghB64 = Buffer.from(ghLine + '\n').toString('base64')
       try {
         await sandbox.process.executeCommand(
@@ -226,7 +430,7 @@ app.post('/api/launch', async (req: Request, res: Response) => {
           undefined,
           60,
         )
-        console.log('[launch] GitHub credential helper configured (%s)', last4(creds.githubToken))
+        console.log('[launch] GitHub credential helper configured (%s)', last4(ghForSandbox))
       } catch (e: any) {
         console.warn('[launch] GitHub credential setup failed (non-fatal):', e?.message || e)
       }
@@ -335,7 +539,7 @@ app.post('/api/launch', async (req: Request, res: Response) => {
 })
 
 // --- Stop/delete a sandbox ---
-app.post('/api/stop', async (req: Request, res: Response) => {
+app.post('/api/stop', requireAuth, async (req: Request, res: Response) => {
   const conn = daytonaFromReq(req)
   if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   const sandboxId = (req.body && req.body.sandboxId) as string | undefined
@@ -354,7 +558,7 @@ app.post('/api/stop', async (req: Request, res: Response) => {
 // --- Bulk-stop launcher sandboxes that have been idle past a threshold ---
 // Idle = running AND lastActivityAt older than idleMinutes (default 30).
 // Only ever touches sandboxes labeled app=opencode-launcher.
-app.post('/api/stop-idle', async (req: Request, res: Response) => {
+app.post('/api/stop-idle', requireAuth, async (req: Request, res: Response) => {
   const conn = daytonaFromReq(req)
   if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   const idleMinutes = Math.max(
@@ -398,7 +602,7 @@ app.post('/api/stop-idle', async (req: Request, res: Response) => {
 })
 
 // --- List sandboxes created by this launcher (live from Daytona, scoped by label) ---
-app.get('/api/sandboxes', async (req: Request, res: Response) => {
+app.get('/api/sandboxes', requireAuth, async (req: Request, res: Response) => {
   const conn = daytonaFromReq(req)
   if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   try {
@@ -438,7 +642,7 @@ app.get('/api/sandboxes', async (req: Request, res: Response) => {
 // Every RUNNING sandbox on the account (any label) counts against the shared
 // CPU/memory pool, so we aggregate the whole account, then break out how much
 // this launcher specifically is using.
-app.get('/api/usage', async (req: Request, res: Response) => {
+app.get('/api/usage', requireAuth, async (req: Request, res: Response) => {
   const conn = daytonaFromReq(req)
   if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   try {
@@ -509,7 +713,7 @@ async function fetchWithTimeout(url: string, init: any, ms = 8000): Promise<glob
 }
 
 // Daytona: construct a client and do a cheap list (stop after first item).
-app.post('/api/validate/daytona', async (req: Request, res: Response) => {
+app.post('/api/validate/daytona', requireAuth, async (req: Request, res: Response) => {
   const apiKey = keyFrom(req, 'X-Daytona-Key', 'key')
   const target = hdr(req, 'X-Daytona-Target') || (req.body && req.body.target) || DAYTONA_TARGET
   if (!apiKey) return res.status(400).json({ ok: false, error: 'Daytona API key is required.' })
@@ -524,7 +728,7 @@ app.post('/api/validate/daytona', async (req: Request, res: Response) => {
 })
 
 // GitHub: GET /user with the PAT.
-app.post('/api/validate/github', async (req: Request, res: Response) => {
+app.post('/api/validate/github', requireAuth, async (req: Request, res: Response) => {
   const token = keyFrom(req, 'X-GitHub-Token', 'token')
   if (!token) return res.status(400).json({ ok: false, error: 'GitHub token is required.' })
   try {
@@ -544,7 +748,7 @@ app.post('/api/validate/github', async (req: Request, res: Response) => {
 })
 
 // Linear: GraphQL viewer + teams. Personal API key uses Authorization: <key> (no Bearer).
-app.post('/api/validate/linear', async (req: Request, res: Response) => {
+app.post('/api/validate/linear', requireAuth, async (req: Request, res: Response) => {
   const key = keyFrom(req, 'X-Linear-Key', 'key')
   if (!key) return res.status(400).json({ ok: false, error: 'Linear API key is required.' })
   try {
@@ -567,7 +771,7 @@ app.post('/api/validate/linear', async (req: Request, res: Response) => {
 })
 
 // Render: GET /v1/owners.
-app.post('/api/validate/render', async (req: Request, res: Response) => {
+app.post('/api/validate/render', requireAuth, async (req: Request, res: Response) => {
   const key = keyFrom(req, 'X-Render-Key', 'key')
   if (!key) return res.status(400).json({ ok: false, error: 'Render API key is required.' })
   try {
@@ -592,6 +796,43 @@ app.listen(PORT, '0.0.0.0', () => {
     Boolean(process.env.DAYTONA_API_KEY), Boolean(process.env.GITHUB_TOKEN),
     Boolean(process.env.LINEAR_API_KEY), Boolean(process.env.RENDER_API_KEY))
 })
+
+const noAllowlistWarning = (!ALLOWED_USERS.length && !ALLOWED_ORG)
+  ? '<div class="warn">No allowlist is configured, so any GitHub user can sign in. Set ALLOWED_GITHUB_USERS and/or ALLOWED_GITHUB_ORG to restrict access.</div>'
+  : ''
+
+function loginPage(error: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in &middot; OpenCode on Daytona</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+  .card { width: 100%; max-width: 420px; padding: 36px 32px; border: 1px solid #222; border-radius: 12px; background: #111418; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: #9aa; font-size: 13px; line-height: 1.55; margin: 0 0 24px; }
+  .gh { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #111; border: 0; padding: 12px 20px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; font-family: inherit; text-decoration: none; }
+  .gh:hover { background: #e9e9e9; }
+  .gh svg { width: 18px; height: 18px; }
+  .err { color: #ff6b6b; font-size: 13px; margin-bottom: 18px; min-height: 16px; }
+  .warn { color: #ffc857; font-size: 11px; line-height: 1.5; margin-top: 20px; border: 1px solid #4a3a1f; background: #1c160c; border-radius: 8px; padding: 10px 12px; }
+  .foot { color: #5a6672; font-size: 11px; margin-top: 22px; }
+</style></head>
+<body>
+<div class="card">
+  <h1>OpenCode on Daytona</h1>
+  <p>Sign in with GitHub to continue. Your GitHub account is also used to let OpenCode push code on your behalf &mdash; no separate token needed.</p>
+  <div class="err">${error ? error.replace(/</g, '&lt;') : ''}</div>
+  <a class="gh" href="/auth/github">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+    Sign in with GitHub
+  </a>
+  ${noAllowlistWarning}
+  <div class="foot">This instance is access-gated. Only authorized GitHub users can enter.</div>
+</div>
+</body></html>`
+}
 
 const LANDING_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -734,7 +975,11 @@ const LANDING_HTML = `<!DOCTYPE html>
       <span class="chip" id="chip-linear"><span class="cdot"></span>Linear</span>
       <span class="chip" id="chip-render"><span class="cdot"></span>Render</span>
     </div>
-    <button class="gear" onclick="openDrawer()">&#9881; Settings</button>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="whoami" class="muted" style="display:none;font-size:12px"></span>
+      <button id="logoutBtn" class="gear" style="display:none" onclick="logout()">Log out</button>
+      <button class="gear" onclick="openDrawer()">&#9881; Settings</button>
+    </div>
   </div>
   <h1>OpenCode on Daytona <span id="tierTag" class="tierTag">free tier</span></h1>
   <p>Launch the <strong>OpenCode</strong> AI coding agent inside on-demand <strong>Daytona</strong> sandboxes. Each running sandbox gets its own preview link &mdash; the dashboard below shows how much of your free-tier quota is in use.</p>
@@ -805,6 +1050,26 @@ function authHeaders(extra) {
   return h
 }
 function last4(v) { return v ? '\u2022\u2022\u2022\u2022 ' + v.slice(-4) : '' }
+
+// ---- account / login state ----
+var ACCOUNT = { authEnabled: false, authed: true, githubAuto: false }
+async function loadAccount() {
+  try { var r = await fetch('/api/me'); ACCOUNT = await r.json() }
+  catch (e) { ACCOUNT = { authEnabled: false, authed: true } }
+  if (ACCOUNT.authEnabled && ACCOUNT.authed && ACCOUNT.login) {
+    var who = document.getElementById('whoami')
+    if (who) { who.textContent = '@' + ACCOUNT.login; who.style.display = '' }
+    var lo = document.getElementById('logoutBtn'); if (lo) lo.style.display = ''
+  }
+  if (ACCOUNT.githubAuto) {
+    var card = document.getElementById('card-github'); if (card) card.classList.add('hide')
+    setChip('github', true)
+  }
+}
+async function logout() {
+  try { await fetch('/auth/logout', { method: 'POST' }) } catch (e) {}
+  location.href = '/login'
+}
 
 // ---- integration config: maps provider -> localStorage key + validate route ----
 var INTG = {
@@ -952,8 +1217,8 @@ function showGate() {
 function showApp() {
   document.getElementById('gate').classList.add('hide')
   document.getElementById('app').classList.remove('hide')
+  loadAccount().then(function () { hydrateDrawer() })
   refreshAll()
-  hydrateDrawer()
 }
 async function gateValidate() {
   var btn = document.getElementById('gateBtn')
@@ -1200,7 +1465,7 @@ setInterval(function () {
   </div>
 
   <!-- GitHub -->
-  <div class="intg">
+  <div class="intg" id="card-github">
     <div class="ihead"><span class="iname">GitHub</span><span class="opt">optional</span><span id="b-github" class="badge b-off" style="margin-left:auto">Not connected</span></div>
     <p class="idesc">Lets OpenCode clone, commit, and push to your GitHub repos, and open PRs.</p>
     <div id="saved-github" class="saved hide"></div>

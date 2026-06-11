@@ -168,6 +168,56 @@ value.
 
 ---
 
+## Locking down your instance (GitHub login)
+
+By default the app is **open** — anyone who can reach the URL can use it (with
+their own keys). To restrict access, enable the optional **GitHub OAuth login
+gate**. When enabled, visitors must sign in with GitHub before they can load the
+app or call any API, and that **same login auto-connects GitHub for OpenCode** —
+the user's OAuth token (with `repo` scope) is injected into their sandboxes, so
+there's no separate GitHub PAT to enter.
+
+### 1. Create a GitHub OAuth app
+Go to **https://github.com/settings/developers → New OAuth App**:
+- **Application name:** anything (e.g. "OpenCode Launcher").
+- **Homepage URL:** `https://your-service.onrender.com`
+- **Authorization callback URL:** `https://your-service.onrender.com/auth/github/callback`
+
+Create it, then **Generate a new client secret**. You'll get a **Client ID** and
+**Client Secret**.
+
+### 2. Set environment variables on your Render service
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GITHUB_CLIENT_ID` | yes (to enable login) | OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | yes (to enable login) | OAuth app client secret |
+| `ALLOWED_GITHUB_USERS` | recommended | Comma-separated GitHub usernames allowed to sign in |
+| `ALLOWED_GITHUB_ORG` | recommended | A GitHub org whose members are allowed to sign in |
+| `SESSION_SECRET` | recommended | Long random string; signs session cookies (keeps logins across restarts) |
+| `APP_BASE_URL` | optional | Force the callback base URL, e.g. `https://your-service.onrender.com` |
+
+Setting **both** `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` turns login on.
+Leaving them unset keeps the app open (handy for local dev).
+
+> **Always set an allowlist when login is enabled.** Without
+> `ALLOWED_GITHUB_USERS` / `ALLOWED_GITHUB_ORG`, **any** GitHub user can sign in.
+> The login screen shows a warning if no allowlist is configured.
+
+### How login interacts with the integrations
+- **GitHub** becomes automatic — the login token is what OpenCode uses to clone/
+  push/PR. The GitHub card disappears from Settings when logged in this way.
+- **Linear** and **Render** remain bring-your-own-key in Settings (a GitHub login
+  can't authenticate other vendors' APIs).
+- Sessions are **stateless signed cookies** (HMAC-SHA256, httpOnly, Secure) — no
+  database or session store, so it stays free-tier friendly.
+
+> **Note on `repo` scope:** to push code on your behalf, the OAuth consent
+> requests the `repo` scope (read/write to your repos). If you prefer tighter,
+> per-repo permissions, a GitHub App (fine-grained tokens) is a future upgrade
+> path; this version uses an OAuth App for simplicity.
+
+---
+
 ## API reference
 
 All sandbox endpoints read credentials from request headers (`X-Daytona-Key`,
@@ -178,6 +228,11 @@ All sandbox endpoints read credentials from request headers (`X-Daytona-Key`,
 | --- | --- | --- |
 | `GET` | `/` | The web app (onboarding gate + dashboard + settings). |
 | `GET` | `/healthz` | Health check; reports which env fallbacks are present (booleans). |
+| `GET` | `/api/me` | Auth status: whether login is enabled and who is signed in. |
+| `GET` | `/login` | Sign-in page (when login is enabled). |
+| `GET` | `/auth/github` | Start GitHub OAuth. |
+| `GET` | `/auth/github/callback` | OAuth callback; sets the session cookie. |
+| `POST`/`GET` | `/auth/logout` | Clear the session. |
 | `POST` | `/api/launch` | Create a sandbox, start OpenCode Web; returns `{ url, token, sandboxId, webReady, publicReady }`. Injects GitHub/Linear/Render creds into the sandbox. |
 | `POST` | `/api/stop` | Body `{ "sandboxId": "..." }` — delete a sandbox. |
 | `POST` | `/api/stop-idle` | Body `{ "idleMinutes": 30 }` — delete launcher sandboxes idle beyond the threshold. |
