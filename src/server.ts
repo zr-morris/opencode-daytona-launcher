@@ -156,6 +156,27 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
     )
 
     const envVar = injectEnvVar('OPENCODE_CONFIG_CONTENT', configJson)
+
+    // Warm up OpenCode's SQLite session DB BEFORE starting the web server.
+    // On a fresh sandbox the DB schema is empty; OpenCode runs migrations
+    // (ALTER TABLE / CREATE INDEX) on first use. If the web UI opens and fires
+    // concurrent requests before migrations finish, the requests race the
+    // migration and fail ("Failed query: ALTER TABLE ...", "index ... already
+    // exists"), which surfaces as the model failing to respond. Running one
+    // serial invocation here applies all migrations to completion first, so the
+    // web UI never hits the race. Best-effort: never fail the launch on warmup.
+    console.log('[launch] Warming up OpenCode session DB (applies migrations)...')
+    try {
+      await sandbox.process.executeCommand(
+        `mkdir -p /home/daytona; cd /home/daytona; ${envVar} opencode run -m ${DEFAULT_MODEL} "ready" >/tmp/opencode-warmup.log 2>&1; true`,
+        undefined,
+        undefined,
+        120,
+      )
+    } catch (warmErr: any) {
+      console.warn('[launch] Warmup step error (non-fatal):', warmErr?.message || warmErr)
+    }
+
     await sandbox.process.executeSessionCommand(sessionId, {
       command: `${envVar} opencode web --hostname 0.0.0.0 --port ${OPENCODE_PORT}`,
       runAsync: true,
