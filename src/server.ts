@@ -250,12 +250,17 @@ const LANDING_HTML = `<!DOCTYPE html>
   .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: #1e262e; color: #7cc5ff; }
   .muted { color: #707070; font-size: 13px; }
   .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row .url { display: block; font-size: 12px; color: #3ddc84; margin-top: 4px; word-break: break-all; }
+  .row .url:hover { text-decoration: underline; }
+  .row .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .btn-copy { background: transparent; color: #7cc5ff; border: 1px solid #2a3a48; }
+  .copied { color: #3ddc84 !important; border-color: #2a4a32 !important; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>OpenCode on Daytona</h1>
-  <p>This backend launches the <strong>OpenCode</strong> AI coding agent inside an on-demand <strong>Daytona</strong> sandbox and gives you a preview link to the OpenCode Web interface.</p>
+  <p>This backend launches the <strong>OpenCode</strong> AI coding agent inside an on-demand <strong>Daytona</strong> sandbox and gives you a preview link to the OpenCode Web interface. Launch as many as you like &mdash; each running sandbox gets its own link in the list below.</p>
   <div class="bar">
     <button id="go" onclick="launch()">Launch OpenCode Web</button>
   </div>
@@ -280,7 +285,7 @@ async function launch() {
     const r = await fetch('/api/launch', { method: 'POST' })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Launch failed')
-    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>'
+    out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + '<br><br><span class="muted">All your running instances and their links are listed below under <b>Active sandboxes</b>.</span>'
     btn.textContent = 'Launch another'
     refresh()
   } catch (e) {
@@ -315,11 +320,20 @@ async function refresh() {
       return
     }
     list.innerHTML = items.map(function (s) {
-      var link = s.url ? ('<a href="' + s.url + '" target="_blank" rel="noopener">open</a>') : ''
+      var urlBlock = s.url
+        ? '<a class="url" href="' + s.url + '" target="_blank" rel="noopener">' + s.url + '</a>'
+        : '<div class="sub" style="color:#c08">no preview url yet</div>'
+      var copyBtn = s.url
+        ? '<button class="btn-sm btn-copy" onclick="copyUrl(this, \\'' + s.url + '\\')">Copy link</button>'
+        : ''
       return '<div class="row">' +
-        '<div class="meta"><div class="id">' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span></div>' +
-        '<div class="sub">' + age(s.createdAt) + ' · ' + link + '</div></div>' +
-        '<button class="btn-sm btn-stop" onclick="stop(\\'' + s.sandboxId + '\\', this)">Stop</button>' +
+        '<div class="meta">' +
+          '<div class="id">' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
+          urlBlock +
+        '</div>' +
+        '<div class="actions">' + copyBtn +
+          '<button class="btn-sm btn-stop" onclick="stop(\\'' + s.sandboxId + '\\', this)">Stop</button>' +
+        '</div>' +
         '</div>'
     }).join('')
   } catch (e) {
@@ -341,6 +355,20 @@ async function stop(id, btn) {
     alert('Error stopping sandbox: ' + (e.message || e))
     btn.disabled = false
     btn.textContent = 'Stop'
+  }
+}
+
+function copyUrl(btn, url) {
+  function done() {
+    var prev = btn.textContent
+    btn.textContent = 'Copied!'
+    btn.classList.add('copied')
+    setTimeout(function () { btn.textContent = prev; btn.classList.remove('copied') }, 1500)
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(function () { window.prompt('Copy this link:', url) })
+  } else {
+    window.prompt('Copy this link:', url)
   }
 }
 
