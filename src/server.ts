@@ -21,7 +21,8 @@ const DEFAULT_MODEL = 'opencode/deepseek-v4-flash-free' // DeepSeek V4 Flash Fre
 // Free-tier Daytona orgs cannot run the default snapshot's linux-vm class.
 // Creating from an image runs as the container class, which the free tier allows.
 const DAYTONA_TARGET = process.env.DAYTONA_TARGET || 'us'
-const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20-slim'
+// node:20 (not -slim) ships git, which OpenCode needs for 'Create Git repository'.
+const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'node:20'
 const APP_LABEL = 'opencode-launcher' // label so we only list/stop sandboxes we created
 const THEME_NAME = 'kpmg-midnight'
 // KPMG Midnight theme (Concept 2): blue->violet brand palette. Full 50-role OpenCode theme.
@@ -139,6 +140,21 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       `mkdir -p "$HOME/.config/opencode/themes" && ` +
         `echo '${themeB64}' | base64 -d > "$HOME/.config/opencode/themes/${THEME_NAME}.json" && ` +
         `echo '${tuiB64}' | base64 -d > "$HOME/.config/opencode/tui.json"`,
+    )
+
+    // Ensure git is available and has an identity. OpenCode's "Create Git repository"
+    // runs `git init`/`git commit`, which fail if git is missing (e.g. on -slim images)
+    // or if user.name/user.email are unset. node:20 ships git; this is belt-and-suspenders.
+    await sandbox.process.executeCommand(
+      `(command -v git >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1)); ` +
+        `git config --global user.name "OpenCode"; ` +
+        `git config --global user.email "opencode@daytona.local"; ` +
+        `git config --global init.defaultBranch main; ` +
+        `git config --global --add safe.directory '*'; ` +
+        `true`,
+      undefined,
+      undefined,
+      180,
     )
 
     const envVar = injectEnvVar('OPENCODE_CONFIG_CONTENT', configJson)
