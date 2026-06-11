@@ -653,10 +653,89 @@ const LANDING_HTML = `<!DOCTYPE html>
   .res span { background: #121a20; border: 1px solid #1f2a32; padding: 1px 6px; border-radius: 6px; }
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
   .dot.run { background: #3ddc84; } .dot.stop { background: #ffc857; } .dot.other { background: #6a7886; }
+  /* ---- onboarding gate ---- */
+  .gate { width: 100%; max-width: 460px; padding: 32px; border: 1px solid #222; border-radius: 12px; background: #111418; }
+  .gate h1 { font-size: 20px; margin: 0 0 6px; }
+  .gate .lead { color: #9aa; font-size: 13px; line-height: 1.55; margin: 0 0 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8a8a8a; margin-bottom: 6px; }
+  .inwrap { position: relative; display: flex; }
+  input[type=password], input[type=text], select { width: 100%; box-sizing: border-box; background: #0c1014; border: 1px solid #283039; color: #e6e6e6; border-radius: 8px; padding: 11px 40px 11px 12px; font-family: inherit; font-size: 14px; }
+  input:focus, select:focus { outline: none; border-color: #3ddc84; }
+  select { padding-right: 12px; }
+  .eye { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: #7a8794; cursor: pointer; padding: 4px; font-size: 12px; }
+  .err { color: #ff6b6b; font-size: 12px; margin-top: 8px; min-height: 14px; }
+  .gate .full { width: 100%; margin-top: 4px; }
+  .hintlink { font-size: 12px; margin-top: 14px; }
+  /* ---- top status strip ---- */
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin: -8px 0 10px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 4px 9px; border-radius: 999px; border: 1px solid #283039; background: #0d1115; color: #9aa; }
+  .chip .cdot { width: 7px; height: 7px; border-radius: 50%; background: #5a6672; }
+  .chip.on { color: #cfe; border-color: #234734; } .chip.on .cdot { background: #3ddc84; }
+  .gear { background: transparent; border: 1px solid #2a3038; color: #cdd; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 13px; }
+  .gear:hover { border-color: #3ddc84; color: #fff; }
+  /* ---- settings drawer ---- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 40; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; height: 100%; width: 440px; max-width: 92vw; background: #0e1216; border-left: 1px solid #222; transform: translateX(100%); transition: transform .25s ease; z-index: 50; overflow-y: auto; box-sizing: border-box; padding: 22px; }
+  .drawer.open { transform: translateX(0); }
+  .drawer h2 { margin: 0; font-size: 16px; color: #e6e6e6; text-transform: none; letter-spacing: 0; }
+  .drawer .dhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .closex { background: transparent; border: 0; color: #9aa; font-size: 20px; cursor: pointer; line-height: 1; padding: 4px; }
+  .closex:hover { color: #fff; }
+  .disclosure { font-size: 11px; color: #7a8794; line-height: 1.5; background: #0c1014; border: 1px solid #1d242b; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+  .intg { border: 1px solid #222; border-radius: 10px; background: #0d1115; padding: 14px; margin-bottom: 12px; }
+  .intg .ihead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .intg .iname { font-size: 14px; font-weight: 700; color: #e6e6e6; }
+  .req { font-size: 9px; color: #3ddc84; border: 1px solid #234734; border-radius: 999px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .opt { font-size: 9px; color: #7a8794; border: 1px solid #2a3038; border-radius: 999px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .intg .idesc { font-size: 12px; color: #8a96a2; line-height: 1.45; margin: 0 0 10px; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+  .badge.b-off { background: #15191e; color: #8a8a8a; border: 1px solid #2a3038; }
+  .badge.b-on { background: #10241a; color: #3ddc84; border: 1px solid #234734; }
+  .badge.b-bad { background: #2a1414; color: #ff6b6b; border: 1px solid #4a2222; }
+  .irow { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .saved { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #cdd; }
+  .ava { width: 24px; height: 24px; border-radius: 50%; border: 1px solid #2a3038; }
+  .btn-primary2 { background: #3ddc84; color: #002; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 700; cursor: pointer; font-family: inherit; font-size: 13px; }
+  .btn-line { background: transparent; color: #cdd; border: 1px solid #2a3038; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; }
+  .btn-line:hover { border-color: #3ddc84; }
+  .btn-danger { background: transparent; color: #ff6b6b; border: 1px solid #4a2222; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; }
+  .hide { display: none !important; }
 </style>
 </head>
 <body>
-<div class="card">
+<!-- Onboarding gate: shown until a valid Daytona key is set -->
+<div id="gate" class="gate hide">
+  <h1>Welcome to OpenCode on Daytona</h1>
+  <p class="lead">This launcher spins up the OpenCode AI coding agent inside on-demand Daytona sandboxes. To get started, connect your Daytona account. Your key is stored only in this browser and sent directly to Daytona &mdash; this server never stores it.</p>
+  <div class="field">
+    <label for="gateKey">Daytona API key</label>
+    <div class="inwrap">
+      <input id="gateKey" type="password" placeholder="dtn_..." autocomplete="off" />
+      <button type="button" class="eye" onclick="toggleEye('gateKey', this)">show</button>
+    </div>
+  </div>
+  <div class="field">
+    <label for="gateTarget">Region</label>
+    <select id="gateTarget"><option value="us">us</option><option value="eu">eu</option></select>
+  </div>
+  <button id="gateBtn" class="btn-primary2 full" onclick="gateValidate()">Validate &amp; Continue</button>
+  <div id="gateErr" class="err"></div>
+  <div class="hintlink"><a href="https://app.daytona.io" target="_blank" rel="noopener">Where do I get a Daytona API key?</a> <span class="muted">&middot; free tier available</span></div>
+</div>
+
+<div id="app" class="card hide">
+  <div class="topbar">
+    <div class="chips" id="chips">
+      <span class="chip" id="chip-daytona"><span class="cdot"></span>Daytona</span>
+      <span class="chip" id="chip-github"><span class="cdot"></span>GitHub</span>
+      <span class="chip" id="chip-linear"><span class="cdot"></span>Linear</span>
+      <span class="chip" id="chip-render"><span class="cdot"></span>Render</span>
+    </div>
+    <button class="gear" onclick="openDrawer()">&#9881; Settings</button>
+  </div>
   <h1>OpenCode on Daytona <span id="tierTag" class="tierTag">free tier</span></h1>
   <p>Launch the <strong>OpenCode</strong> AI coding agent inside on-demand <strong>Daytona</strong> sandboxes. Each running sandbox gets its own preview link &mdash; the dashboard below shows how much of your free-tier quota is in use.</p>
   <div class="bar">
@@ -704,6 +783,206 @@ const LANDING_HTML = `<!DOCTYPE html>
   <div id="list"></div>
 </div>
 <script>
+// ---- BYOK key storage (browser localStorage only; never sent anywhere but the APIs) ----
+var LS = {
+  daytonaKey: 'ocdl_daytona_key',
+  daytonaTarget: 'ocdl_daytona_target',
+  githubToken: 'ocdl_github_token',
+  linearKey: 'ocdl_linear_key',
+  linearTeam: 'ocdl_linear_team',
+  renderKey: 'ocdl_render_key',
+}
+function lsGet(k) { try { return localStorage.getItem(k) || '' } catch (e) { return '' } }
+function lsSet(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k) } catch (e) {} }
+function authHeaders(extra) {
+  var h = extra || {}
+  var dk = lsGet(LS.daytonaKey); if (dk) h['X-Daytona-Key'] = dk
+  var dt = lsGet(LS.daytonaTarget); if (dt) h['X-Daytona-Target'] = dt
+  var gh = lsGet(LS.githubToken); if (gh) h['X-GitHub-Token'] = gh
+  var lk = lsGet(LS.linearKey); if (lk) h['X-Linear-Key'] = lk
+  var lt = lsGet(LS.linearTeam); if (lt) h['X-Linear-Team'] = lt
+  var rk = lsGet(LS.renderKey); if (rk) h['X-Render-Key'] = rk
+  return h
+}
+function last4(v) { return v ? '\u2022\u2022\u2022\u2022 ' + v.slice(-4) : '' }
+
+// ---- integration config: maps provider -> localStorage key + validate route ----
+var INTG = {
+  daytona: { ls: LS.daytonaKey, route: '/api/validate/daytona', label: 'Daytona' },
+  github:  { ls: LS.githubToken, route: '/api/validate/github', label: 'GitHub' },
+  linear:  { ls: LS.linearKey, route: '/api/validate/linear', label: 'Linear' },
+  render:  { ls: LS.renderKey, route: '/api/validate/render', label: 'Render' },
+}
+
+function toggleEye(id, btn) {
+  var el = document.getElementById(id)
+  if (!el) return
+  if (el.type === 'password') { el.type = 'text'; btn.textContent = 'hide' }
+  else { el.type = 'password'; btn.textContent = 'show' }
+}
+
+function setBadge(p, state, text) {
+  var b = document.getElementById('b-' + p)
+  if (!b) return
+  b.className = 'badge ' + (state === 'on' ? 'b-on' : state === 'bad' ? 'b-bad' : 'b-off')
+  b.textContent = text || (state === 'on' ? 'Connected' : state === 'bad' ? 'Invalid' : 'Not connected')
+}
+function setChip(p, on) {
+  var c = document.getElementById('chip-' + p)
+  if (c) c.className = 'chip' + (on ? ' on' : '')
+}
+
+// Show the "saved" summary (masked key + details) vs the edit input for a provider.
+function showSaved(p, html) {
+  document.getElementById('saved-' + p).innerHTML = html
+  document.getElementById('saved-' + p).classList.remove('hide')
+  document.getElementById('edit-' + p).classList.add('hide')
+  var rep = document.getElementById('rep-' + p); if (rep) rep.classList.remove('hide')
+  var dis = document.getElementById('dis-' + p); if (dis) dis.classList.remove('hide')
+}
+function showEdit(p) {
+  document.getElementById('saved-' + p).classList.add('hide')
+  document.getElementById('edit-' + p).classList.remove('hide')
+  var rep = document.getElementById('rep-' + p); if (rep) rep.classList.add('hide')
+  var dis = document.getElementById('dis-' + p); if (dis) dis.classList.add('hide')
+}
+
+function openDrawer() { document.getElementById('drawer').classList.add('open'); document.getElementById('scrim').classList.add('open') }
+function closeDrawer() { document.getElementById('drawer').classList.remove('open'); document.getElementById('scrim').classList.remove('open') }
+
+// Validate a key against its route; returns the JSON (or {ok:false}).
+async function validateKey(p, key, extraHeaders) {
+  var headers = extraHeaders || {}
+  headers['Content-Type'] = 'application/json'
+  if (p === 'daytona') headers['X-Daytona-Key'] = key
+  if (p === 'github') headers['X-GitHub-Token'] = key
+  if (p === 'linear') headers['X-Linear-Key'] = key
+  if (p === 'render') headers['X-Render-Key'] = key
+  try {
+    var r = await fetch(INTG[p].route, { method: 'POST', headers: headers, body: '{}' })
+    return await r.json()
+  } catch (e) { return { ok: false, error: String(e && e.message || e) } }
+}
+
+// Render the populated/connected state for a provider from a validation result.
+function renderConnected(p, key, data) {
+  setBadge(p, 'on'); setChip(p, true)
+  if (p === 'daytona') {
+    showSaved(p, '<span>' + last4(key) + '</span><span class="muted">region ' + (lsGet(LS.daytonaTarget) || 'us') + '</span>')
+  } else if (p === 'github') {
+    var av = data.avatarUrl ? '<img class="ava" src="' + data.avatarUrl + '" alt="" />' : ''
+    showSaved(p, av + '<span>' + (data.login ? '@' + data.login : last4(key)) + (data.name ? ' \u00b7 ' + data.name : '') + '</span>')
+  } else if (p === 'render') {
+    var o = (data.owners && data.owners[0]) || {}
+    showSaved(p, '<span>' + last4(key) + '</span><span class="muted">' + (o.name ? o.name + ' (' + (o.type||'') + ')' : 'connected') + '</span>')
+  } else if (p === 'linear') {
+    var nm = (data.viewer && data.viewer.name) ? data.viewer.name : ''
+    showSaved(p, '<span>' + last4(key) + '</span><span class="muted">' + (nm || 'connected') + '</span>')
+    populateLinearTeams(data.teams || [])
+  }
+}
+
+function populateLinearTeams(teams) {
+  var wrap = document.getElementById('team-linear')
+  var sel = document.getElementById('in-linear-team')
+  if (!teams.length) { wrap.classList.add('hide'); return }
+  var cur = lsGet(LS.linearTeam)
+  sel.innerHTML = teams.map(function (t) {
+    return '<option value="' + t.id + '"' + (t.id === cur ? ' selected' : '') + '>' + t.name + ' (' + t.key + ')</option>'
+  }).join('')
+  wrap.classList.remove('hide')
+  // If no team chosen yet, default to first and persist.
+  if (!cur && teams[0]) { lsSet(LS.linearTeam, teams[0].id); sel.value = teams[0].id }
+}
+function saveLinearTeam() {
+  var sel = document.getElementById('in-linear-team')
+  lsSet(LS.linearTeam, sel.value)
+}
+
+// Test & Save button for any provider in the drawer.
+async function testSave(p) {
+  var input = document.getElementById('in-' + p)
+  var key = (input.value || '').trim()
+  var errEl = document.getElementById('err-' + p)
+  errEl.textContent = ''
+  if (!key) { errEl.textContent = 'Enter a key first.'; return }
+  setBadge(p, 'off', 'Testing...')
+  var extra = {}
+  if (p === 'daytona') { var t = document.getElementById('in-daytona-target'); if (t) extra['X-Daytona-Target'] = t.value }
+  var data = await validateKey(p, key, extra)
+  if (!data.ok) { setBadge(p, 'bad'); setChip(p, p === 'daytona' ? false : false); errEl.textContent = data.error || 'Validation failed.'; return }
+  // Persist + render connected.
+  lsSet(INTG[p].ls, key)
+  if (p === 'daytona') { var tv = document.getElementById('in-daytona-target'); if (tv) lsSet(LS.daytonaTarget, tv.value) }
+  input.value = ''
+  renderConnected(p, key, data)
+}
+
+function replaceKey(p) { showEdit(p) }
+function disconnect(p) {
+  lsSet(INTG[p].ls, '')
+  if (p === 'linear') lsSet(LS.linearTeam, '')
+  setBadge(p, 'off'); setChip(p, false)
+  showEdit(p)
+  document.getElementById('err-' + p).textContent = ''
+  // Daytona disconnect returns user to the gate.
+  if (p === 'daytona') location.reload()
+}
+
+// On drawer open / boot, reflect stored keys (without re-validating heavy ones,
+// except we re-validate to fetch details like github login / linear teams).
+async function hydrateDrawer() {
+  for (var p in INTG) {
+    var key = lsGet(INTG[p].ls)
+    if (!key) { setBadge(p, 'off'); setChip(p, false); showEdit(p); continue }
+    setBadge(p, 'off', 'Checking...')
+    var extra = {}
+    if (p === 'daytona') extra['X-Daytona-Target'] = lsGet(LS.daytonaTarget) || 'us'
+    var data = await validateKey(p, key, extra)
+    if (data.ok) { renderConnected(p, key, data) }
+    else { setBadge(p, 'bad'); setChip(p, false); showEdit(p) }
+  }
+}
+
+// ---- onboarding gate ----
+function showGate() {
+  document.getElementById('gate').classList.remove('hide')
+  document.getElementById('app').classList.add('hide')
+}
+function showApp() {
+  document.getElementById('gate').classList.add('hide')
+  document.getElementById('app').classList.remove('hide')
+  refreshAll()
+  hydrateDrawer()
+}
+async function gateValidate() {
+  var btn = document.getElementById('gateBtn')
+  var key = (document.getElementById('gateKey').value || '').trim()
+  var target = document.getElementById('gateTarget').value || 'us'
+  var err = document.getElementById('gateErr')
+  err.textContent = ''
+  if (!key) { err.textContent = 'Enter your Daytona API key.'; return }
+  btn.disabled = true; btn.textContent = 'Validating...'
+  var data = await validateKey('daytona', key, { 'X-Daytona-Target': target })
+  btn.disabled = false; btn.textContent = 'Validate & Continue'
+  if (!data.ok) { err.textContent = data.error || 'Invalid key.'; return }
+  lsSet(LS.daytonaKey, key); lsSet(LS.daytonaTarget, target)
+  showApp()
+}
+
+// ---- boot: decide gate vs app ----
+async function boot() {
+  var key = lsGet(LS.daytonaKey)
+  if (!key) { showGate(); return }
+  // Pre-fill gate target select from storage.
+  var gt = document.getElementById('gateTarget'); if (gt) gt.value = lsGet(LS.daytonaTarget) || 'us'
+  var dt = document.getElementById('in-daytona-target'); if (dt) dt.value = lsGet(LS.daytonaTarget) || 'us'
+  // Validate stored key; if good show app, else gate (prefilled).
+  var data = await validateKey('daytona', key, { 'X-Daytona-Target': lsGet(LS.daytonaTarget) || 'us' })
+  if (data.ok) { showApp() }
+  else { document.getElementById('gateKey').value = ''; showGate(); document.getElementById('gateErr').textContent = 'Saved Daytona key is no longer valid. Please re-enter.' }
+}
+
 async function launch() {
   const btn = document.getElementById('go')
   const out = document.getElementById('out')
@@ -712,7 +991,7 @@ async function launch() {
   out.style.display = 'block'
   out.textContent = 'Creating Daytona sandbox, installing OpenCode, starting web server...'
   try {
-    const r = await fetch('/api/launch', { method: 'POST' })
+    const r = await fetch('/api/launch', { method: 'POST', headers: authHeaders() })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Launch failed')
     out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + '<br><br><span class="muted">All your running instances and their links are listed below under <b>Active OpenCode sandboxes</b>.</span>'
@@ -750,7 +1029,7 @@ function paintGauge(prefix, used, max, unit) {
 
 async function loadUsage() {
   try {
-    const r = await fetch('/api/usage')
+    const r = await fetch('/api/usage', { headers: authHeaders() })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'usage failed')
 
@@ -792,7 +1071,7 @@ async function refresh() {
   const status = document.getElementById('listStatus')
   status.textContent = 'loading...'
   try {
-    const r = await fetch('/api/sandboxes')
+    const r = await fetch('/api/sandboxes', { headers: authHeaders() })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Failed to list')
     const items = d.sandboxes || []
@@ -836,7 +1115,7 @@ async function stop(id, btn) {
   btn.disabled = true
   btn.textContent = 'Stopping...'
   try {
-    const r = await fetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandboxId: id }) })
+    const r = await fetch('/api/stop', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ sandboxId: id }) })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop failed')
     refreshAll()
@@ -855,7 +1134,7 @@ async function stopIdle() {
   var prev = btn.textContent
   btn.textContent = 'Stopping idle...'
   try {
-    var r = await fetch('/api/stop-idle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idleMinutes: IDLE_MINUTES }) })
+    var r = await fetch('/api/stop-idle', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ idleMinutes: IDLE_MINUTES }) })
     var d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop-idle failed')
     var n = d.stoppedCount || 0
@@ -885,10 +1164,89 @@ function copyUrl(btn, url) {
   }
 }
 
-refreshAll()
-// Auto-refresh the dashboard + list every 15s.
-setInterval(refreshAll, 15000)
+// Boot: show gate or app based on stored Daytona key validity.
+boot()
+// Auto-refresh the dashboard + list every 15s, but only when the app is unlocked.
+setInterval(function () {
+  var app = document.getElementById('app')
+  if (app && !app.classList.contains('hide')) refreshAll()
+}, 15000)
 </script>
+
+<!-- Settings drawer -->
+<div id="scrim" class="scrim" onclick="closeDrawer()"></div>
+<div id="drawer" class="drawer" role="dialog" aria-label="Integrations">
+  <div class="dhead">
+    <h2>Integrations</h2>
+    <button class="closex" onclick="closeDrawer()">&times;</button>
+  </div>
+  <div class="disclosure">Your keys are stored only in this browser (localStorage) and sent directly to your own Daytona / GitHub / Linear / Render. This server never stores them.</div>
+
+  <!-- Daytona -->
+  <div class="intg">
+    <div class="ihead"><span class="iname">Daytona</span><span class="req">required</span><span id="b-daytona" class="badge b-off" style="margin-left:auto">Not connected</span></div>
+    <p class="idesc">Spins up the sandboxes that run OpenCode. This is the access key for the whole app.</p>
+    <div id="saved-daytona" class="saved hide"></div>
+    <div id="edit-daytona">
+      <div class="inwrap"><input id="in-daytona" type="password" placeholder="dtn_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-daytona', this)">show</button></div>
+      <div class="field" style="margin-top:8px"><label for="in-daytona-target">Region</label><select id="in-daytona-target"><option value="us">us</option><option value="eu">eu</option></select></div>
+    </div>
+    <div class="irow">
+      <button class="btn-primary2" onclick="testSave('daytona')">Test &amp; Save</button>
+      <button id="rep-daytona" class="btn-line hide" onclick="replaceKey('daytona')">Replace</button>
+      <button id="dis-daytona" class="btn-danger hide" onclick="disconnect('daytona')">Disconnect</button>
+    </div>
+    <div id="err-daytona" class="err"></div>
+  </div>
+
+  <!-- GitHub -->
+  <div class="intg">
+    <div class="ihead"><span class="iname">GitHub</span><span class="opt">optional</span><span id="b-github" class="badge b-off" style="margin-left:auto">Not connected</span></div>
+    <p class="idesc">Lets OpenCode clone, commit, and push to your GitHub repos, and open PRs.</p>
+    <div id="saved-github" class="saved hide"></div>
+    <div id="edit-github">
+      <div class="inwrap"><input id="in-github" type="password" placeholder="ghp_... or github_pat_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-github', this)">show</button></div>
+    </div>
+    <div class="irow">
+      <button class="btn-primary2" onclick="testSave('github')">Test &amp; Save</button>
+      <button id="rep-github" class="btn-line hide" onclick="replaceKey('github')">Replace</button>
+      <button id="dis-github" class="btn-danger hide" onclick="disconnect('github')">Disconnect</button>
+    </div>
+    <div id="err-github" class="err"></div>
+  </div>
+
+  <!-- Linear -->
+  <div class="intg">
+    <div class="ihead"><span class="iname">Linear</span><span class="opt">optional</span><span id="b-linear" class="badge b-off" style="margin-left:auto">Not connected</span></div>
+    <p class="idesc">Link commits/PRs to Linear issues. Free tier supports up to 2 teams &mdash; pick which one to use.</p>
+    <div id="saved-linear" class="saved hide"></div>
+    <div id="edit-linear">
+      <div class="inwrap"><input id="in-linear" type="password" placeholder="lin_api_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-linear', this)">show</button></div>
+    </div>
+    <div id="team-linear" class="field hide" style="margin-top:10px"><label for="in-linear-team">Team</label><select id="in-linear-team" onchange="saveLinearTeam()"></select></div>
+    <div class="irow">
+      <button class="btn-primary2" onclick="testSave('linear')">Test &amp; Save</button>
+      <button id="rep-linear" class="btn-line hide" onclick="replaceKey('linear')">Replace</button>
+      <button id="dis-linear" class="btn-danger hide" onclick="disconnect('linear')">Disconnect</button>
+    </div>
+    <div id="err-linear" class="err"></div>
+  </div>
+
+  <!-- Render -->
+  <div class="intg">
+    <div class="ihead"><span class="iname">Render</span><span class="opt">optional</span><span id="b-render" class="badge b-off" style="margin-left:auto">Not connected</span></div>
+    <p class="idesc">Bring your Render key to self-host this launcher and (later) deploy apps OpenCode builds. See the README for one-click self-hosting.</p>
+    <div id="saved-render" class="saved hide"></div>
+    <div id="edit-render">
+      <div class="inwrap"><input id="in-render" type="password" placeholder="rnd_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-render', this)">show</button></div>
+    </div>
+    <div class="irow">
+      <button class="btn-primary2" onclick="testSave('render')">Test &amp; Save</button>
+      <button id="rep-render" class="btn-line hide" onclick="replaceKey('render')">Replace</button>
+      <button id="dis-render" class="btn-danger hide" onclick="disconnect('render')">Disconnect</button>
+    </div>
+    <div id="err-render" class="err"></div>
+  </div>
 </div>
 </body>
 </html>`
