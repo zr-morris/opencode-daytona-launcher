@@ -1369,6 +1369,12 @@ async function refreshAll() {
   await Promise.all([loadUsage(), refresh()])
 }
 
+// Sandboxes the user just stopped. Daytona's list() is eventually consistent
+// and may keep returning a just-deleted sandbox as 'started' for a few seconds,
+// which would make the row reappear. We suppress these ids client-side until
+// Daytona stops returning them.
+var STOPPED_IDS = {}
+function markStopped(id) { STOPPED_IDS[id] = Date.now() }
 async function refresh() {
   const list = document.getElementById('list')
   const status = document.getElementById('listStatus')
@@ -1377,7 +1383,15 @@ async function refresh() {
     const r = await fetch('/api/sandboxes', { headers: authHeaders() })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Failed to list')
-    const items = d.sandboxes || []
+    var rawItems = d.sandboxes || []
+    // Drop any ids the server still returns but the user just stopped.
+    var returnedIds = {}
+    rawItems.forEach(function (x) { returnedIds[x.sandboxId] = true })
+    const items = rawItems.filter(function (x) { return !STOPPED_IDS[x.sandboxId] })
+    // Forget suppression once Daytona stops returning that id (and after >2min safety).
+    Object.keys(STOPPED_IDS).forEach(function (id) {
+      if (!returnedIds[id] || (Date.now() - STOPPED_IDS[id]) > 120000) delete STOPPED_IDS[id]
+    })
     status.textContent = items.length + ' sandbox' + (items.length === 1 ? '' : 'es')
     if (!items.length) {
       list.innerHTML = '<p class="muted">No active sandboxes.</p>'
@@ -1396,7 +1410,7 @@ async function refresh() {
         '<span>' + (s.memory || 0) + ' GiB</span>' +
         '<span>' + (s.disk || 0) + ' GiB disk</span>' +
         '</span>'
-      return '<div class="row">' +
+      return '<div class="row" data-sandbox="' + s.sandboxId + '">' +
         '<div class="meta">' +
           '<div class="id"><span class="dot ' + dotClass + '"></span>' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
           urlBlock +
@@ -1421,7 +1435,20 @@ async function stop(id, btn) {
     const r = await fetch('/api/stop', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ sandboxId: id }) })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop failed')
-    refreshAll()
+    // Optimistic UI: remove this row NOW and suppress the id so eventual-consistent
+    // list refreshes don't bring it back while Daytona finishes deleting.
+    markStopped(id)
+    var row = document.querySelector('.row[data-sandbox="' + id + '"]')
+    if (row && row.parentNode) row.parentNode.removeChild(row)
+    // Update the list count + empty-state, and refresh quota gauges.
+    var listEl = document.getElementById('list')
+    var statusEl = document.getElementById('listStatus')
+    var remaining = listEl ? listEl.querySelectorAll('.row').length : 0
+    if (statusEl) statusEl.textContent = remaining + ' sandbox' + (remaining === 1 ? '' : 'es')
+    if (listEl && remaining === 0) listEl.innerHTML = '<p class="muted">No active sandboxes.</p>'
+    loadUsage()
+    // A delayed refresh reconciles with Daytona once deletion settles.
+    setTimeout(refreshAll, 4000)
   } catch (e) {
     alert('Error stopping sandbox: ' + (e.message || e))
     btn.disabled = false
@@ -1441,6 +1468,11 @@ async function stopIdle() {
     var d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop-idle failed')
     var n = d.stoppedCount || 0
+    ;(d.stopped || []).forEach(function (sid) {
+      markStopped(sid)
+      var rr = document.querySelector('.row[data-sandbox="' + sid + '"]')
+      if (rr && rr.parentNode) rr.parentNode.removeChild(rr)
+    })
     var msg = n === 0 ? 'No idle sandboxes to stop (nothing idle > ' + IDLE_MINUTES + 'm).' : ('Stopped ' + n + ' idle sandbox' + (n === 1 ? '' : 'es') + '.')
     if (d.failed && d.failed.length) msg += ' ' + d.failed.length + ' failed.'
     alert(msg)
