@@ -4,17 +4,25 @@
 # GitHub / Linear / Render keys in the web UI (stored in their browser), so NO
 # environment variables are required to deploy. Just deploy and open the URL.
 #
+# Forking & self-hosting? Rename the service below to whatever you like — it
+# becomes part of your URL (https://<name>-XXXX.onrender.com). Everything else
+# works as-is; the app auto-detects its own URL for OAuth callbacks.
+#
 # (Optional) Operators who prefer to pre-bake credentials can add any of these
 # as environment variables in the Render dashboard; they act as fallbacks when
 # a request has no corresponding header:
 #   DAYTONA_API_KEY, DAYTONA_TARGET, GITHUB_TOKEN, LINEAR_API_KEY,
 #   LINEAR_TEAM_ID, RENDER_API_KEY, OPENAI_API_KEY
+#
+# (Optional) To require GitHub login (see README "Locking down your instance"),
+# add: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, SESSION_SECRET,
+#      ALLOWED_GITHUB_USERS and/or ALLOWED_GITHUB_ORG.
 services:
   - type: web
-    name: opencode-daytona-launcher
+    # Rename this for your own deployment (must be unique within your account).
+    name: opencode-launcher
     runtime: node
     plan: free
-    region: oregon
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /healthz

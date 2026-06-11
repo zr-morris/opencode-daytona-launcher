@@ -172,7 +172,17 @@ value.
 
 By default the app is **open** — anyone who can reach the URL can use it (with
 their own keys). To restrict access, enable the optional **GitHub OAuth login
-gate**. When enabled, visitors must sign in with GitHub before they can load the
+gate**.
+
+> **Do this in the right order** (the callback URL depends on your live URL):
+> 1. **Deploy first** (steps above) and note your service URL,
+>    `https://<your-service>.onrender.com`.
+> 2. **Create the GitHub OAuth app** using *that* URL for the callback (below).
+> 3. **Add the env vars** to your Render service and let it redeploy.
+>
+> You can't create the OAuth app before deploying, because GitHub needs your
+> real callback URL. The app auto-detects its own URL, so you don't need to
+> hardcode it (though you may set `APP_BASE_URL` to be explicit). When enabled, visitors must sign in with GitHub before they can load the
 app or call any API, and that **same login auto-connects GitHub for OpenCode** —
 the user's OAuth token (with `repo` scope) is injected into their sandboxes, so
 there's no separate GitHub PAT to enter.
@@ -180,8 +190,11 @@ there's no separate GitHub PAT to enter.
 ### 1. Create a GitHub OAuth app
 Go to **https://github.com/settings/developers → New OAuth App**:
 - **Application name:** anything (e.g. "OpenCode Launcher").
-- **Homepage URL:** `https://your-service.onrender.com`
-- **Authorization callback URL:** `https://your-service.onrender.com/auth/github/callback`
+- **Homepage URL:** `https://<your-service>.onrender.com`  *(your real Render URL)*
+- **Authorization callback URL:** `https://<your-service>.onrender.com/auth/github/callback`
+
+> Replace `<your-service>` with your actual Render service URL from step 1 — do
+> **not** use someone else's URL.
 
 Create it, then **Generate a new client secret**. You'll get a **Client ID** and
 **Client Secret**.
