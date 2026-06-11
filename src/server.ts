@@ -39,10 +39,50 @@ const SANDBOX_DISK = 5 // GiB
 const RUNNING_STATES = new Set(['started', 'starting', 'running'])
 const DEFAULT_IDLE_MINUTES = parseInt(process.env.DEFAULT_IDLE_MINUTES || '30', 10)
 
-const daytonaApiKey = process.env.DAYTONA_API_KEY
-if (!daytonaApiKey) {
-  console.error('FATAL: DAYTONA_API_KEY is not set. Set it in the Render service environment.')
+// ---------------------------------------------------------------------------
+// BYOK credential model (stateless server).
+// Keys are supplied by the browser per-request via X-* headers and are NEVER
+// persisted or logged here. For operator convenience, env vars act as optional
+// fallbacks when a header is absent. Header always takes precedence over env.
+// ---------------------------------------------------------------------------
+interface Creds {
+  daytonaKey?: string
+  daytonaTarget: string
+  githubToken?: string
+  linearKey?: string
+  linearTeam?: string
+  renderKey?: string
 }
+
+function hdr(req: Request, name: string): string | undefined {
+  const v = req.header(name)
+  if (v && String(v).trim()) return String(v).trim()
+  return undefined
+}
+
+function getCreds(req: Request): Creds {
+  return {
+    daytonaKey: hdr(req, 'X-Daytona-Key') || process.env.DAYTONA_API_KEY || undefined,
+    daytonaTarget:
+      hdr(req, 'X-Daytona-Target') || process.env.DAYTONA_TARGET || DAYTONA_TARGET,
+    githubToken: hdr(req, 'X-GitHub-Token') || process.env.GITHUB_TOKEN || undefined,
+    linearKey: hdr(req, 'X-Linear-Key') || process.env.LINEAR_API_KEY || undefined,
+    linearTeam: hdr(req, 'X-Linear-Team') || process.env.LINEAR_TEAM_ID || undefined,
+    renderKey: hdr(req, 'X-Render-Key') || process.env.RENDER_API_KEY || undefined,
+  }
+}
+
+// Build a Daytona client from per-request creds, or null if no key is present.
+function daytonaFromReq(req: Request): { daytona: Daytona; target: string } | null {
+  const c = getCreds(req)
+  if (!c.daytonaKey) return null
+  return { daytona: new Daytona({ apiKey: c.daytonaKey, target: c.daytonaTarget }), target: c.daytonaTarget }
+}
+
+const NO_KEY_MSG = 'No Daytona API key. Add it in Settings.'
+
+// last4 helper for safe logging (never logs the full key)
+function last4(v?: string): string { return v ? '...' + v.slice(-4) : '(none)' }
 
 // Generate a shell snippet that injects an env var via base64 (avoids quoting issues).
 function injectEnvVar(name: string, content: string): string {
@@ -61,11 +101,16 @@ app.get('/healthz', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     service: 'opencode-daytona-launcher',
-    daytonaConfigured: Boolean(daytonaApiKey),
+    statelessByok: true,
     opencodeVersion: OPENCODE_VERSION,
     defaultModel: DEFAULT_MODEL,
     sandboxImage: SANDBOX_IMAGE,
-    daytonaTarget: DAYTONA_TARGET,
+    defaultDaytonaTarget: DAYTONA_TARGET,
+    // Optional operator env fallbacks (booleans only; never expose values).
+    daytonaEnvFallback: Boolean(process.env.DAYTONA_API_KEY),
+    githubEnvFallback: Boolean(process.env.GITHUB_TOKEN),
+    linearEnvFallback: Boolean(process.env.LINEAR_API_KEY),
+    renderEnvFallback: Boolean(process.env.RENDER_API_KEY),
     activeSandboxes: sandboxes.size,
   })
 })
@@ -76,18 +121,26 @@ app.get('/', (_req: Request, res: Response) => {
 })
 
 // --- Launch a new OpenCode Web sandbox ---
-app.post('/api/launch', async (_req: Request, res: Response) => {
-  if (!daytonaApiKey) {
-    return res.status(500).json({ error: 'DAYTONA_API_KEY is not configured on the server.' })
+app.post('/api/launch', async (req: Request, res: Response) => {
+  const creds = getCreds(req)
+  if (!creds.daytonaKey) {
+    return res.status(400).json({ error: NO_KEY_MSG })
   }
 
-  const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+  const daytona = new Daytona({ apiKey: creds.daytonaKey, target: creds.daytonaTarget })
   let sandbox: Sandbox | undefined
 
   try {
     console.log('[launch] Creating sandbox...')
+    console.log('[launch] creds present -> daytona:%s github:%s linear:%s render:%s',
+      last4(creds.daytonaKey), Boolean(creds.githubToken), Boolean(creds.linearKey), Boolean(creds.renderKey))
     const envVars: Record<string, string> = {}
     if (process.env.OPENAI_API_KEY) envVars.OPENAI_API_KEY = process.env.OPENAI_API_KEY
+    // Inject the user's BYOK integration creds so OpenCode can use them.
+    if (creds.githubToken) { envVars.GH_TOKEN = creds.githubToken; envVars.GITHUB_TOKEN = creds.githubToken }
+    if (creds.linearKey) envVars.LINEAR_API_KEY = creds.linearKey
+    if (creds.linearTeam) envVars.LINEAR_TEAM_ID = creds.linearTeam
+    if (creds.renderKey) envVars.RENDER_API_KEY = creds.renderKey
     sandbox = await daytona.create(
       {
         image: SANDBOX_IMAGE,
@@ -154,6 +207,30 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       undefined,
       180,
     )
+
+    // If a GitHub token was provided, configure a credential helper so OpenCode
+    // can clone/push over HTTPS without prompting. The token is written to
+    // ~/.git-credentials (chmod 600). Passed via base64 so it never appears in
+    // the command line or logs.
+    if (creds.githubToken) {
+      const ghLine = `https://x-access-token:${creds.githubToken}@github.com`
+      const ghB64 = Buffer.from(ghLine + '\n').toString('base64')
+      try {
+        await sandbox.process.executeCommand(
+          `git config --global credential.helper store; ` +
+            `umask 077; echo '${ghB64}' | base64 -d > "$HOME/.git-credentials"; ` +
+            `chmod 600 "$HOME/.git-credentials"; ` +
+            `git config --global user.name "OpenCode"; ` +
+            `true`,
+          undefined,
+          undefined,
+          60,
+        )
+        console.log('[launch] GitHub credential helper configured (%s)', last4(creds.githubToken))
+      } catch (e: any) {
+        console.warn('[launch] GitHub credential setup failed (non-fatal):', e?.message || e)
+      }
+    }
 
     const envVar = injectEnvVar('OPENCODE_CONFIG_CONTENT', configJson)
 
@@ -259,11 +336,12 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
 
 // --- Stop/delete a sandbox ---
 app.post('/api/stop', async (req: Request, res: Response) => {
-  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+  const conn = daytonaFromReq(req)
+  if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   const sandboxId = (req.body && req.body.sandboxId) as string | undefined
   if (!sandboxId) return res.status(400).json({ error: 'sandboxId is required' })
   try {
-    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const daytona = conn.daytona
     const sb = await (daytona as any).get(sandboxId)
     if (sb) await sb.delete()
     sandboxes.delete(sandboxId)
@@ -277,7 +355,8 @@ app.post('/api/stop', async (req: Request, res: Response) => {
 // Idle = running AND lastActivityAt older than idleMinutes (default 30).
 // Only ever touches sandboxes labeled app=opencode-launcher.
 app.post('/api/stop-idle', async (req: Request, res: Response) => {
-  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+  const conn = daytonaFromReq(req)
+  if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   const idleMinutes = Math.max(
     1,
     parseInt(String((req.body && req.body.idleMinutes) ?? DEFAULT_IDLE_MINUTES), 10) || DEFAULT_IDLE_MINUTES,
@@ -285,7 +364,7 @@ app.post('/api/stop-idle', async (req: Request, res: Response) => {
   const cutoff = Date.now() - idleMinutes * 60_000
   const TERMINAL = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
   try {
-    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const daytona = conn.daytona
     const candidates: { id: string; idleMin: number }[] = []
     const kept: { id: string; reason: string }[] = []
     for await (const sb of daytona.list({ labels: { app: APP_LABEL } } as any)) {
@@ -319,10 +398,11 @@ app.post('/api/stop-idle', async (req: Request, res: Response) => {
 })
 
 // --- List sandboxes created by this launcher (live from Daytona, scoped by label) ---
-app.get('/api/sandboxes', async (_req: Request, res: Response) => {
-  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+app.get('/api/sandboxes', async (req: Request, res: Response) => {
+  const conn = daytonaFromReq(req)
+  if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   try {
-    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const daytona = conn.daytona
     const out: any[] = []
     const HIDDEN_STATES = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
     for await (const sb of daytona.list({ labels: { app: APP_LABEL } } as any)) {
@@ -358,10 +438,11 @@ app.get('/api/sandboxes', async (_req: Request, res: Response) => {
 // Every RUNNING sandbox on the account (any label) counts against the shared
 // CPU/memory pool, so we aggregate the whole account, then break out how much
 // this launcher specifically is using.
-app.get('/api/usage', async (_req: Request, res: Response) => {
-  if (!daytonaApiKey) return res.status(500).json({ error: 'DAYTONA_API_KEY not configured' })
+app.get('/api/usage', async (req: Request, res: Response) => {
+  const conn = daytonaFromReq(req)
+  if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
   try {
-    const daytona = new Daytona({ apiKey: daytonaApiKey, target: DAYTONA_TARGET })
+    const daytona = conn.daytona
     const TERMINAL = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error'])
     let total = 0, running = 0, stopped = 0, launcherTotal = 0, launcherRunning = 0
     let usedCpu = 0, usedMem = 0, usedDisk = 0
@@ -412,9 +493,104 @@ app.get('/api/usage', async (_req: Request, res: Response) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// Validation endpoints. Each reads the relevant key (header preferred, body
+// fallback) and verifies it with a real lightweight API call. Never logs keys.
+// ---------------------------------------------------------------------------
+function keyFrom(req: Request, header: string, bodyField: string): string | undefined {
+  return hdr(req, header) || (req.body && req.body[bodyField] ? String(req.body[bodyField]).trim() : undefined)
+}
+
+async function fetchWithTimeout(url: string, init: any, ms = 8000): Promise<globalThis.Response> {
+  const ctl = new AbortController()
+  const t = setTimeout(() => ctl.abort(), ms)
+  try { return await fetch(url, { ...init, signal: ctl.signal }) }
+  finally { clearTimeout(t) }
+}
+
+// Daytona: construct a client and do a cheap list (stop after first item).
+app.post('/api/validate/daytona', async (req: Request, res: Response) => {
+  const apiKey = keyFrom(req, 'X-Daytona-Key', 'key')
+  const target = hdr(req, 'X-Daytona-Target') || (req.body && req.body.target) || DAYTONA_TARGET
+  if (!apiKey) return res.status(400).json({ ok: false, error: 'Daytona API key is required.' })
+  try {
+    const daytona = new Daytona({ apiKey, target })
+    // Iterate the async list and immediately break — confirms auth works.
+    for await (const _sb of daytona.list()) break
+    return res.json({ ok: true, target })
+  } catch (err: any) {
+    return res.status(200).json({ ok: false, error: 'Invalid Daytona key or unreachable: ' + String(err?.message || err) })
+  }
+})
+
+// GitHub: GET /user with the PAT.
+app.post('/api/validate/github', async (req: Request, res: Response) => {
+  const token = keyFrom(req, 'X-GitHub-Token', 'token')
+  if (!token) return res.status(400).json({ ok: false, error: 'GitHub token is required.' })
+  try {
+    const r = await fetchWithTimeout('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'opencode-daytona-launcher',
+        Accept: 'application/vnd.github+json',
+      },
+    })
+    if (!r.ok) return res.json({ ok: false, error: 'GitHub rejected the token (HTTP ' + r.status + ').' })
+    const u: any = await r.json()
+    return res.json({ ok: true, login: u.login, name: u.name, avatarUrl: u.avatar_url })
+  } catch (err: any) {
+    return res.json({ ok: false, error: 'GitHub validation failed: ' + String(err?.message || err) })
+  }
+})
+
+// Linear: GraphQL viewer + teams. Personal API key uses Authorization: <key> (no Bearer).
+app.post('/api/validate/linear', async (req: Request, res: Response) => {
+  const key = keyFrom(req, 'X-Linear-Key', 'key')
+  if (!key) return res.status(400).json({ ok: false, error: 'Linear API key is required.' })
+  try {
+    const r = await fetchWithTimeout('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: key },
+      body: JSON.stringify({ query: '{ viewer { id name email } teams { nodes { id name key } } }' }),
+    })
+    const data: any = await r.json().catch(() => ({}))
+    if (!r.ok || data.errors) {
+      const msg = data.errors ? data.errors.map((e: any) => e.message).join('; ') : 'HTTP ' + r.status
+      return res.json({ ok: false, error: 'Linear rejected the key: ' + msg })
+    }
+    const viewer = data?.data?.viewer || {}
+    const teams = (data?.data?.teams?.nodes || []).map((t: any) => ({ id: t.id, name: t.name, key: t.key }))
+    return res.json({ ok: true, viewer: { name: viewer.name, email: viewer.email }, teams })
+  } catch (err: any) {
+    return res.json({ ok: false, error: 'Linear validation failed: ' + String(err?.message || err) })
+  }
+})
+
+// Render: GET /v1/owners.
+app.post('/api/validate/render', async (req: Request, res: Response) => {
+  const key = keyFrom(req, 'X-Render-Key', 'key')
+  if (!key) return res.status(400).json({ ok: false, error: 'Render API key is required.' })
+  try {
+    const r = await fetchWithTimeout('https://api.render.com/v1/owners?limit=1', {
+      headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+    })
+    if (!r.ok) return res.json({ ok: false, error: 'Render rejected the key (HTTP ' + r.status + ').' })
+    const arr: any = await r.json()
+    const owners = (Array.isArray(arr) ? arr : []).map((x: any) => {
+      const o = x.owner || x
+      return { id: o.id, name: o.name, type: o.type }
+    })
+    return res.json({ ok: true, owners })
+  } catch (err: any) {
+    return res.json({ ok: false, error: 'Render validation failed: ' + String(err?.message || err) })
+  }
+})
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`opencode-daytona-launcher listening on 0.0.0.0:${PORT}`)
-  console.log(`Daytona configured: ${Boolean(daytonaApiKey)}`)
+  console.log('Stateless BYOK mode. Env fallbacks -> daytona:%s github:%s linear:%s render:%s',
+    Boolean(process.env.DAYTONA_API_KEY), Boolean(process.env.GITHUB_TOKEN),
+    Boolean(process.env.LINEAR_API_KEY), Boolean(process.env.RENDER_API_KEY))
 })
 
 const LANDING_HTML = `<!DOCTYPE html>
