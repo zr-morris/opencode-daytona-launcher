@@ -1,3 +1,14 @@
+# Render Blueprint for the OpenCode + Daytona launcher.
+#
+# Zero-config: this app is BRING-YOUR-OWN-KEYS. Users enter their Daytona /
+# GitHub / Linear / Render keys in the web UI (stored in their browser), so NO
+# environment variables are required to deploy. Just deploy and open the URL.
+#
+# (Optional) Operators who prefer to pre-bake credentials can add any of these
+# as environment variables in the Render dashboard; they act as fallbacks when
+# a request has no corresponding header:
+#   DAYTONA_API_KEY, DAYTONA_TARGET, GITHUB_TOKEN, LINEAR_API_KEY,
+#   LINEAR_TEAM_ID, RENDER_API_KEY, OPENAI_API_KEY
 services:
   - type: web
     name: opencode-daytona-launcher
@@ -8,8 +19,3 @@ services:
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
-    envVars:
-      - key: DAYTONA_API_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
