@@ -209,6 +209,31 @@ const sandboxes = new Map<string, { url: string; createdAt: string }>()
 const app = express()
 app.use(express.json())
 
+// ---- Favicon: inline SVG (terminal prompt mark, app dark + green theme) ----
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#11161c"/>
+      <stop offset="1" stop-color="#0a0d10"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)" stroke="#1f2730" stroke-width="2"/>
+  <g filter="url(#glow)" fill="none" stroke="#3ddc84" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="20,22 30,32 20,42"/>
+    <line x1="36" y1="42" x2="46" y2="42"/>
+  </g>
+</svg>`
+
+app.get('/favicon.svg', (_req: Request, res: Response) => {
+  res.type('image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(FAVICON_SVG)
+})
+// Some browsers request /favicon.ico directly; point them at the SVG.
+app.get('/favicon.ico', (_req: Request, res: Response) => res.redirect(301, '/favicon.svg'))
+
 // ---- Auth status endpoint (always available; tells the UI whether to show login) ----
 app.get('/api/me', (req: Request, res: Response) => {
   if (!AUTH_ENABLED) return res.json({ authEnabled: false, authed: true })
@@ -806,6 +831,7 @@ function loginPage(error: string): string {
 <html lang="en"><head>
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Sign in &middot; OpenCode on Daytona</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
   :root { color-scheme: dark; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; padding: 20px; }
@@ -840,6 +866,7 @@ const LANDING_HTML = `<!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OpenCode on Daytona</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
   :root { color-scheme: dark; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d10; color: #e6e6e6; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; padding: 20px; }

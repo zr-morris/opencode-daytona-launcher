@@ -11,7 +11,12 @@
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js"
   },
-  "keywords": ["opencode", "daytona", "render", "sandbox"],
+  "keywords": [
+    "opencode",
+    "daytona",
+    "render",
+    "sandbox"
+  ],
   "license": "MIT",
   "dependencies": {
     "@daytona/sdk": "^0.186.0",
