@@ -182,12 +182,20 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       runAsync: true,
     })
 
-    // Wait until the OpenCode web server is actually listening on the port
-    // before returning the URL. Without this, the launcher hands back the
-    // preview link a few seconds before 'opencode web' binds the port, so
-    // opening it immediately yields an HTTP 502 from the Daytona proxy
-    // ("This page isn't working"). Poll localhost from inside the sandbox.
-    console.log('[launch] Waiting for OpenCode web server to accept connections...')
+    const opencodePreviewLink = await sandbox.getPreviewLink(OPENCODE_PORT)
+    const sandboxId = (sandbox as any).id ?? (sandbox as any).sandboxId ?? 'unknown'
+
+    // Two-stage readiness check before returning the URL, so the link works the
+    // instant the user receives it (no HTTP 502 "This page isn't working").
+    //
+    // Stage 1 (inside): confirm 'opencode web' is bound to the port. Without
+    //   this the URL is handed back before the server starts listening.
+    // Stage 2 (outside): confirm the PUBLIC preview URL answers through the
+    //   Daytona proxy. When a second sandbox comes up, its public preview route
+    //   takes a few extra seconds to register at the proxy edge; the localhost
+    //   check passes but the public URL still 502s briefly. Probing the public
+    //   URL from here waits out that proxy propagation. Best-effort with a cap.
+    console.log('[launch] Stage 1: waiting for web server to listen (inside sandbox)...')
     let webReady = false
     for (let i = 0; i < 20; i++) {
       try {
@@ -202,10 +210,29 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       } catch {}
       await new Promise((r) => setTimeout(r, 2000))
     }
-    console.log(`[launch] Web server ready: ${webReady}`)
+    console.log(`[launch] Stage 1 (inside) ready: ${webReady}`)
 
-    const opencodePreviewLink = await sandbox.getPreviewLink(OPENCODE_PORT)
-    const sandboxId = (sandbox as any).id ?? (sandbox as any).sandboxId ?? 'unknown'
+    // Stage 2: probe the public preview URL from the launcher (through the proxy).
+    let publicReady = false
+    for (let i = 0; i < 20; i++) {
+      try {
+        const ctl = new AbortController()
+        const timer = setTimeout(() => ctl.abort(), 6000)
+        const resp = await fetch(opencodePreviewLink.url, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: ctl.signal,
+        })
+        clearTimeout(timer)
+        // 200 = ready. 3xx (proxy redirect) also means the route is live.
+        if (resp.status === 200 || (resp.status >= 300 && resp.status < 400)) {
+          publicReady = true
+          break
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+    console.log(`[launch] Stage 2 (public proxy) ready: ${publicReady}`)
     const record = { url: opencodePreviewLink.url, createdAt: new Date().toISOString() }
     sandboxes.set(sandboxId, record)
 
@@ -217,6 +244,7 @@ app.post('/api/launch', async (_req: Request, res: Response) => {
       url: opencodePreviewLink.url,
       token: previewToken,
       webReady,
+      publicReady,
       opencodeVersion: OPENCODE_VERSION,
       defaultModel: DEFAULT_MODEL,
       note: 'OpenCode Web is starting inside the Daytona sandbox. Open the URL; it may take a few seconds to become available. If prompted, the preview token authorizes access to this sandbox.',
