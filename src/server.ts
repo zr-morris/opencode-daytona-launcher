@@ -680,8 +680,22 @@ app.get('/api/sandboxes', requireAuth, async (req: Request, res: Response) => {
         disk: Number((sb as any).disk ?? 0),
         running: RUNNING_STATES.has(String(state)),
         url,
+        ready: false,
       })
     }
+    // Probe each running sandbox's public preview URL in parallel (short timeout)
+    // so the list only marks a link 'ready' once it actually answers — matching
+    // the launch readiness check and preventing a premature (502-prone) link.
+    await Promise.all(out.map(async (row) => {
+      if (!row.url || !row.running) return
+      try {
+        const ctl = new AbortController()
+        const t = setTimeout(() => ctl.abort(), 3500)
+        const r = await fetch(row.url, { method: 'GET', redirect: 'manual', signal: ctl.signal })
+        clearTimeout(t)
+        if (r.status === 200 || (r.status >= 300 && r.status < 400)) row.ready = true
+      } catch { /* not ready yet */ }
+    }))
     // newest first
     out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     res.json({ count: out.length, sandboxes: out })
@@ -1428,13 +1442,21 @@ async function refresh() {
       return
     }
     list.innerHTML = items.map(function (s) {
-      var urlBlock = s.url
-        ? '<a class="url" href="' + s.url + '" target="_blank" rel="noopener">' + s.url + '</a>'
-        : '<div class="sub" style="color:#c08">no preview url yet</div>'
-      var copyBtn = s.url
-        ? '<button class="btn-sm btn-copy" onclick="copyUrl(this, \\'' + s.url + '\\')">Copy link</button>'
-        : ''
-      var dotClass = s.running ? 'run' : (String(s.state) === 'stopped' ? 'stop' : 'other')
+      var urlBlock
+      var copyBtn
+      if (s.url && s.ready) {
+        urlBlock = '<a class="url" href="' + s.url + '" target="_blank" rel="noopener">' + s.url + '</a>'
+        copyBtn = '<button class="btn-sm btn-copy" onclick="copyUrl(this, \\'' + s.url + '\\')">Copy link</button>'
+      } else if (s.url) {
+        // Sandbox exists but OpenCode Web is not serving yet — avoid a 502-prone link.
+        urlBlock = '<div class="sub" style="color:#9a9a9a">\\u23f3 Starting OpenCode Web\\u2026 link appears when ready</div>'
+        copyBtn = '<button class="btn-sm btn-copy" disabled style="opacity:.5;cursor:default">Copy link</button>'
+      } else {
+        urlBlock = '<div class="sub" style="color:#9a9a9a">\\u23f3 Starting\\u2026</div>'
+        copyBtn = ''
+      }
+      var dotClass = (s.running && s.ready) ? 'run' : (s.running ? 'other' : (String(s.state) === 'stopped' ? 'stop' : 'other'))
+      var statePill = (s.running && !s.ready) ? 'starting' : (s.state || '')
       var resChips = '<span class="res">' +
         '<span>' + (s.cpu || 0) + ' vCPU</span>' +
         '<span>' + (s.memory || 0) + ' GiB</span>' +
@@ -1442,7 +1464,7 @@ async function refresh() {
         '</span>'
       return '<div class="row" data-sandbox="' + s.sandboxId + '">' +
         '<div class="meta">' +
-          '<div class="id"><span class="dot ' + dotClass + '"></span>' + short(s.sandboxId) + ' <span class="pill">' + (s.state || '') + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
+          '<div class="id"><span class="dot ' + dotClass + '"></span>' + short(s.sandboxId) + ' <span class="pill">' + statePill + '</span> <span class="sub" style="margin-left:6px">' + age(s.createdAt) + '</span></div>' +
           urlBlock +
           '<div>' + resChips + '</div>' +
         '</div>' +
