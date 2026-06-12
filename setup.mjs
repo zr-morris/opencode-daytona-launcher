@@ -30,8 +30,10 @@ async function main() {
   log('\n=== OpenCode on Daytona — self-host setup ===')
   log('This creates a Render web service in YOUR Render account and deploys this launcher.\n')
 
-  const rl = readline.createInterface({ input, output })
+  const NONINTERACTIVE = process.env.NONINTERACTIVE === '1' || !input.isTTY
+  const rl = NONINTERACTIVE ? null : readline.createInterface({ input, output })
   const ask = async (q, def) => {
+    if (NONINTERACTIVE) { if (def) console.log(`${q}: ${def}`); return def || '' }
     const suffix = def ? ` [${def}]` : ''
     const a = (await rl.question(`${q}${suffix}: `)).trim()
     return a || def || ''
@@ -47,14 +49,14 @@ async function main() {
     log('NOTE: the repo MUST be PUBLIC for automatic deploy. Services created from a')
     log('public repo URL do not auto-deploy; push changes then run `npm run deploy`.\n')
     const repo = await ask('Public GitHub repo URL to deploy', detected || process.env.DEPLOY_REPO)
-    if (!repo) { log('A repo URL is required. Aborting.'); rl.close(); process.exit(1) }
+    if (!repo) { log('A repo URL is required. Aborting.'); rl && rl.close(); process.exit(1) }
     await checkPublicRepo(repo, ask)
 
     // --- 2. Credentials ---
     const renderKey = (await askSecret(rl, 'Render API key (required)', process.env.RENDER_API_KEY))
-    if (!renderKey) { log('Render API key is required. Aborting.'); rl.close(); process.exit(1) }
+    if (!renderKey) { log('Render API key is required. Aborting.'); rl && rl.close(); process.exit(1) }
     const daytonaKey = (await askSecret(rl, 'Daytona API key (required, baked into the deploy)', process.env.DAYTONA_API_KEY))
-    if (!daytonaKey) { log('Daytona API key is required. Aborting.'); rl.close(); process.exit(1) }
+    if (!daytonaKey) { log('Daytona API key is required. Aborting.'); rl && rl.close(); process.exit(1) }
     const daytonaTarget = await ask('Daytona region (us/eu)', process.env.DAYTONA_TARGET || 'us')
 
     log('\nOptional: enable GitHub login gate (leave blank to skip).')
@@ -78,7 +80,7 @@ async function main() {
     log('\nLooking up your Render account...')
     const owners = await renderGET(renderKey, '/owners?limit=20')
     const ownerList = (Array.isArray(owners) ? owners : []).map((x) => x.owner || x)
-    if (!ownerList.length) { log('No Render owners found for this API key. Aborting.'); rl.close(); process.exit(1) }
+    if (!ownerList.length) { log('No Render owners found for this API key. Aborting.'); rl && rl.close(); process.exit(1) }
     let owner = ownerList[0]
     if (ownerList.length > 1) {
       log('Multiple Render owners:')
@@ -108,7 +110,7 @@ async function main() {
     const created = await renderPOST(renderKey, '/services', createBody)
     const svc = created.service || created
     const serviceId = svc.id || (svc.service && svc.service.id)
-    if (!serviceId) { log('Could not determine new service id. Response:'); log(JSON.stringify(created, null, 2)); rl.close(); process.exit(1) }
+    if (!serviceId) { log('Could not determine new service id. Response:'); log(JSON.stringify(created, null, 2)); rl && rl.close(); process.exit(1) }
     log(`Service created: ${serviceId}`)
     fs.writeFileSync('.render-service', serviceId + '\n')
 
@@ -158,10 +160,10 @@ async function main() {
     }
     log('  - Public-repo services do NOT auto-deploy. After pushing changes, run: npm run deploy')
     log('')
-    rl.close()
+    rl && rl.close()
   } catch (err) {
     log('\nSetup failed: ' + (err && err.message ? err.message : String(err)))
-    rl.close()
+    rl && rl.close()
     process.exit(1)
   }
 }
@@ -180,6 +182,7 @@ function repoName(repo) {
 }
 async function askSecret(rl, q, envVal) {
   if (envVal) { console.log(`${q}: using value from environment (${last4(envVal)})`); return envVal }
+  if (!rl) return '' // non-interactive and no env value -> caller handles the 'required' error
   return (await rl.question(`${q}: `)).trim()
 }
 async function checkPublicRepo(repo, ask) {
@@ -189,7 +192,7 @@ async function checkPublicRepo(repo, ask) {
     const r = await fetchT(`https://api.github.com/repos/${m[1]}/${m[2]}`, { headers: { 'User-Agent': 'opencode-setup', Accept: 'application/vnd.github+json' } })
     if (r.status === 404) {
       const go = await ask('That repo looks private or missing (GitHub 404). Continue anyway? (y/N)', 'N')
-      if (go.toLowerCase() !== 'y') { console.log('Aborting. Make the repo public, then re-run.'); process.exit(1) }
+      if (String(go).toLowerCase() !== 'y') { console.log('Aborting. Make the repo public, then re-run.'); process.exit(1) }
     }
   } catch { /* network hiccup; continue */ }
 }
