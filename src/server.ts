@@ -580,6 +580,26 @@ app.post('/api/stop', requireAuth, async (req: Request, res: Response) => {
   }
 })
 
+// --- Status of a single sandbox (used to poll until a Stop actually completes) ---
+// Returns { exists, gone, state }. 'gone' is true when the sandbox no longer
+// exists or is in a terminal/destroying state, i.e. safe to remove from the UI.
+app.get('/api/sandbox-status', requireAuth, async (req: Request, res: Response) => {
+  const conn = daytonaFromReq(req)
+  if (!conn) return res.status(400).json({ error: NO_KEY_MSG })
+  const id = String(req.query.id || '')
+  if (!id) return res.status(400).json({ error: 'id is required' })
+  const GONE_STATES = new Set(['destroying', 'destroyed', 'archived', 'archiving', 'error', 'stopped'])
+  try {
+    const sb = await (conn.daytona as any).get(id)
+    if (!sb) return res.json({ exists: false, gone: true, state: 'deleted' })
+    const state = String((sb as any).state ?? 'unknown')
+    return res.json({ exists: true, gone: GONE_STATES.has(state), state })
+  } catch (err: any) {
+    // get() throwing (e.g. 404) means the sandbox is gone.
+    return res.json({ exists: false, gone: true, state: 'deleted' })
+  }
+})
+
 // --- Bulk-stop launcher sandboxes that have been idle past a threshold ---
 // Idle = running AND lastActivityAt older than idleMinutes (default 30).
 // Only ever touches sandboxes labeled app=opencode-launcher.
@@ -1376,6 +1396,9 @@ async function refreshAll() {
 var STOPPED_IDS = {}
 function markStopped(id) { STOPPED_IDS[id] = Date.now() }
 async function refresh() {
+  // Don't fight an in-progress Stop: re-rendering would reset the 'Stopping...'
+  // button. Skip this refresh cycle while any stop is mid-flight.
+  if (Object.keys(STOPPING).length) return
   const list = document.getElementById('list')
   const status = document.getElementById('listStatus')
   status.textContent = 'loading...'
@@ -1427,29 +1450,47 @@ async function refresh() {
   }
 }
 
+// Ids currently being stopped — pause auto-refresh interference for these so a
+// mid-flight list render doesn't reset the 'Stopping...' button.
+var STOPPING = {}
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
+
 async function stop(id, btn) {
   if (!confirm('Stop and delete sandbox ' + short(id) + '? This cannot be undone.')) return
   btn.disabled = true
   btn.textContent = 'Stopping...'
+  STOPPING[id] = true
+  markStopped(id)
   try {
     const r = await fetch('/api/stop', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ sandboxId: id }) })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Stop failed')
-    // Optimistic UI: remove this row NOW and suppress the id so eventual-consistent
-    // list refreshes don't bring it back while Daytona finishes deleting.
-    markStopped(id)
+
+    // Poll Daytona until the sandbox is actually gone, keeping the button in the
+    // 'Stopping...' state the whole time. Only then remove the row.
+    var gone = false
+    for (var i = 0; i < 45; i++) { // up to ~90s
+      await sleep(2000)
+      try {
+        var sr = await fetch('/api/sandbox-status?id=' + encodeURIComponent(id), { headers: authHeaders() })
+        var sd = await sr.json()
+        if (sr.ok && sd.gone) { gone = true; break }
+      } catch (e) { /* keep polling */ }
+    }
+
+    // Remove the row (whether confirmed gone or we hit the poll cap — it's
+    // deleting regardless).
     var row = document.querySelector('.row[data-sandbox="' + id + '"]')
     if (row && row.parentNode) row.parentNode.removeChild(row)
-    // Update the list count + empty-state, and refresh quota gauges.
     var listEl = document.getElementById('list')
     var statusEl = document.getElementById('listStatus')
     var remaining = listEl ? listEl.querySelectorAll('.row').length : 0
     if (statusEl) statusEl.textContent = remaining + ' sandbox' + (remaining === 1 ? '' : 'es')
     if (listEl && remaining === 0) listEl.innerHTML = '<p class="muted">No active sandboxes.</p>'
-    loadUsage()
-    // A delayed refresh reconciles with Daytona once deletion settles.
-    setTimeout(refreshAll, 4000)
+    delete STOPPING[id]
+    refreshAll()
   } catch (e) {
+    delete STOPPING[id]
     alert('Error stopping sandbox: ' + (e.message || e))
     btn.disabled = false
     btn.textContent = 'Stop'
