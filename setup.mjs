@@ -1,247 +1,215 @@
 #!/usr/bin/env node
 /*
- * OpenCode + Daytona launcher — one-command self-host deployer.
- *
- * Programmatically creates a Render web service in YOUR OWN Render account and
- * deploys this launcher to it. No browser needed for the common case.
+ * OpenCode — Azure Foundry edition: guided install.
  *
  *   npm run setup
  *
- * Uses only Node built-ins (Node 18+ for global fetch). Reads answers from
- * prompts, falling back to environment variables so it can run non-interactively
- * (e.g. RENDER_API_KEY=... DAYTONA_API_KEY=... npm run setup).
+ * Captures (and LIVE-TESTS) the firm's configuration, then writes:
+ *   - .env          (secrets + settings; gitignored)
+ *   - opencode.json (Azure Foundry provider + deployments + default model)
  *
- * IMPORTANT: Render's API can only auto-create a service from a PUBLIC GitHub
- * repo URL without a browser GitHub connection. Such services do NOT get
- * auto-deploy — push changes, then run `npm run deploy` to redeploy.
+ * After this, `npm run build && npm start` runs an app that "just works":
+ * OpenCode in Daytona sandboxes defaulting to your Azure Foundry deployment,
+ * gated by corporate Entra SSO.
+ *
+ * Designed to be run by a DevOps person inside (or with line-of-sight to) the
+ * Azure VNet, so the live tests against the private Foundry endpoint succeed.
+ *
+ * Node built-ins only + @azure/identity (already a dependency) for the Entra
+ * managed-identity live test.
  */
 import readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
-import { execSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 
-const RENDER_API = 'https://api.render.com/v1'
+const NONINTERACTIVE = process.env.NONINTERACTIVE === '1' || !input.isTTY
+const rl = NONINTERACTIVE ? null : readline.createInterface({ input, output })
+const log = (...a) => console.log(...a)
+const last4 = (v) => (v ? '...' + String(v).slice(-4) : '(none)')
 
-function log(...a) { console.log(...a) }
-function last4(v) { return v ? '...' + String(v).slice(-4) : '(none)' }
-
-async function main() {
-  log('\n=== OpenCode on Daytona — self-host setup ===')
-  log('This creates a Render web service in YOUR Render account and deploys this launcher.\n')
-
-  const NONINTERACTIVE = process.env.NONINTERACTIVE === '1' || !input.isTTY
-  const rl = NONINTERACTIVE ? null : readline.createInterface({ input, output })
-  const ask = async (q, def) => {
-    if (NONINTERACTIVE) { if (def) console.log(`${q}: ${def}`); return def || '' }
-    const suffix = def ? ` [${def}]` : ''
-    const a = (await rl.question(`${q}${suffix}: `)).trim()
-    return a || def || ''
-  }
-
-  try {
-    // --- 1. Repo URL (auto-detect from git, confirm/override) ---
-    let detected = ''
-    try {
-      const raw = execSync('git remote get-url origin', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
-      detected = normalizeRepo(raw)
-    } catch { /* no git remote */ }
-    log('NOTE: the repo MUST be PUBLIC for automatic deploy. Services created from a')
-    log('public repo URL do not auto-deploy; push changes then run `npm run deploy`.\n')
-    const repo = await ask('Public GitHub repo URL to deploy', detected || process.env.DEPLOY_REPO)
-    if (!repo) { log('A repo URL is required. Aborting.'); rl && rl.close(); process.exit(1) }
-    await checkPublicRepo(repo, ask)
-
-    // --- 2. Credentials ---
-    const renderKey = (await askSecret(rl, 'Render API key (required)', process.env.RENDER_API_KEY))
-    if (!renderKey) { log('Render API key is required. Aborting.'); rl && rl.close(); process.exit(1) }
-    const daytonaKey = (await askSecret(rl, 'Daytona API key (required, baked into the deploy)', process.env.DAYTONA_API_KEY))
-    if (!daytonaKey) { log('Daytona API key is required. Aborting.'); rl && rl.close(); process.exit(1) }
-    const daytonaTarget = await ask('Daytona region (us/eu)', process.env.DAYTONA_TARGET || 'us')
-
-    log('\nOptional: enable GitHub login gate (leave blank to skip).')
-    const ghClientId = await ask('GitHub OAuth Client ID', process.env.GITHUB_CLIENT_ID || '')
-    let ghClientSecret = ''
-    let sessionSecret = ''
-    let allowedUsers = ''
-    let allowedOrg = ''
-    if (ghClientId) {
-      ghClientSecret = await askSecret(rl, 'GitHub OAuth Client Secret', process.env.GITHUB_CLIENT_SECRET)
-      allowedUsers = await ask('Allowed GitHub usernames (comma-separated)', process.env.ALLOWED_GITHUB_USERS || '')
-      allowedOrg = await ask('Allowed GitHub org (optional)', process.env.ALLOWED_GITHUB_ORG || '')
-      sessionSecret = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')
-      log('  (generated a random SESSION_SECRET)')
-    }
-
-    const defaultName = repoName(repo) || 'opencode-launcher'
-    const name = await ask('Render service name', process.env.SERVICE_NAME || defaultName)
-
-    // --- 3. Render owner ---
-    log('\nLooking up your Render account...')
-    const owners = await renderGET(renderKey, '/owners?limit=20')
-    const ownerList = (Array.isArray(owners) ? owners : []).map((x) => x.owner || x)
-    if (!ownerList.length) { log('No Render owners found for this API key. Aborting.'); rl && rl.close(); process.exit(1) }
-    let owner = ownerList[0]
-    if (ownerList.length > 1) {
-      log('Multiple Render owners:')
-      ownerList.forEach((o, i) => log(`  [${i}] ${o.name} (${o.type})`))
-      const idx = parseInt(await ask('Choose owner index', '0'), 10) || 0
-      owner = ownerList[idx] || ownerList[0]
-    }
-    log(`Using owner: ${owner.name} (${owner.type})`)
-
-    // --- 4. Create the service ---
-    log(`\nCreating Render web service "${name}" from ${repo} ...`)
-    const createBody = {
-      type: 'web_service',
-      name,
-      ownerId: owner.id,
-      repo,
-      autoDeploy: 'no', // public-repo services can't auto-deploy
-      serviceDetails: {
-        env: 'node',
-        plan: 'free',
-        envSpecificDetails: {
-          buildCommand: 'npm install && npm run build',
-          startCommand: 'npm start',
-        },
-      },
-    }
-    const created = await renderPOST(renderKey, '/services', createBody)
-    const svc = created.service || created
-    const serviceId = svc.id || (svc.service && svc.service.id)
-    if (!serviceId) { log('Could not determine new service id. Response:'); log(JSON.stringify(created, null, 2)); rl && rl.close(); process.exit(1) }
-    log(`Service created: ${serviceId}`)
-    fs.writeFileSync('.render-service', serviceId + '\n')
-
-    // --- 5. Env vars ---
-    const envVars = [{ key: 'DAYTONA_API_KEY', value: daytonaKey }]
-    if (daytonaTarget && daytonaTarget !== 'us') envVars.push({ key: 'DAYTONA_TARGET', value: daytonaTarget })
-    if (ghClientId) {
-      envVars.push({ key: 'GITHUB_CLIENT_ID', value: ghClientId })
-      envVars.push({ key: 'GITHUB_CLIENT_SECRET', value: ghClientSecret })
-      envVars.push({ key: 'SESSION_SECRET', value: sessionSecret })
-      if (allowedUsers) envVars.push({ key: 'ALLOWED_GITHUB_USERS', value: allowedUsers })
-      if (allowedOrg) envVars.push({ key: 'ALLOWED_GITHUB_ORG', value: allowedOrg })
-    }
-    log(`Setting ${envVars.length} environment variable(s): ${envVars.map((e) => e.key).join(', ')}`)
-    await renderPUT(renderKey, `/services/${serviceId}/env-vars`, envVars)
-
-    // --- 6. Deploy + poll ---
-    log('Triggering deploy...')
-    const dep = await renderPOST(renderKey, `/services/${serviceId}/deploys`, {})
-    const deployId = dep.id || (dep.deploy && dep.deploy.id)
-    log(`Deploy ${deployId || '(unknown id)'} started. Waiting for it to go live (up to ~15 min)...`)
-    const live = await pollDeploy(renderKey, serviceId, deployId)
-
-    // --- 7. Resolve URL + next steps ---
-    const svcAfter = await renderGET(renderKey, `/services/${serviceId}`)
-    const url = findUrl(svcAfter) || findUrl(svc) || ''
-    if (url) {
-      // set APP_BASE_URL so OAuth callbacks resolve correctly
-      try {
-        const merged = envVars.concat([{ key: 'APP_BASE_URL', value: url }])
-        await renderPUT(renderKey, `/services/${serviceId}/env-vars`, merged)
-      } catch { /* non-fatal */ }
-    }
-
-    log('\n========================================')
-    log(live ? 'DEPLOY LIVE' : 'Deploy did not confirm live in time (check the Render dashboard).')
-    if (url) log(`URL: ${url}`)
-    log('========================================')
-    log('Next steps:')
-    log('  - Open the URL above. Daytona is already configured (baked in), so you go straight to the dashboard.')
-    log('  - Connect Linear/Render (optional) in Settings; keys stay in your browser.')
-    if (ghClientId && url) {
-      log('  - GitHub login is enabled. In your GitHub OAuth app, set the Authorization callback URL to:')
-      log(`      ${url}/auth/github/callback`)
-    } else if (!ghClientId) {
-      log('  - To require GitHub login later, create a GitHub OAuth app and re-run setup (or set the GitHub env vars in Render).')
-    }
-    log('  - Public-repo services do NOT auto-deploy. After pushing changes, run: npm run deploy')
-    log('')
-    rl && rl.close()
-  } catch (err) {
-    log('\nSetup failed: ' + (err && err.message ? err.message : String(err)))
-    rl && rl.close()
-    process.exit(1)
-  }
+async function ask(q, def) {
+  if (NONINTERACTIVE) { if (def) log(`${q}: ${def}`); return def || '' }
+  const a = (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim()
+  return a || def || ''
+}
+async function askReq(q, envVal) {
+  if (envVal) { log(`${q}: (from env ${last4(envVal)})`); return envVal }
+  if (NONINTERACTIVE) return ''
+  let v = ''
+  while (!v) { v = (await rl.question(`${q} (required): `)).trim(); if (!v) log('  ...required.') }
+  return v
+}
+async function askYN(q, defYes) {
+  const d = defYes ? 'Y/n' : 'y/N'
+  const a = (await ask(`${q} (${d})`, defYes ? 'Y' : 'N')).toLowerCase()
+  return a.startsWith('y')
 }
 
-// ---- helpers ----
-function normalizeRepo(raw) {
-  let u = raw.trim()
-  const m = u.match(/^git@github\.com:(.+?)(\.git)?$/)
-  if (m) return 'https://github.com/' + m[1]
-  u = u.replace(/\.git$/, '')
-  return u
-}
-function repoName(repo) {
-  const m = repo.match(/github\.com\/[^/]+\/([^/]+)/)
-  return m ? m[1] : ''
-}
-async function askSecret(rl, q, envVal) {
-  if (envVal) { console.log(`${q}: using value from environment (${last4(envVal)})`); return envVal }
-  if (!rl) return '' // non-interactive and no env value -> caller handles the 'required' error
-  return (await rl.question(`${q}: `)).trim()
-}
-async function checkPublicRepo(repo, ask) {
-  const m = repo.match(/github\.com\/([^/]+)\/([^/]+)/)
-  if (!m) return
-  try {
-    const r = await fetchT(`https://api.github.com/repos/${m[1]}/${m[2]}`, { headers: { 'User-Agent': 'opencode-setup', Accept: 'application/vnd.github+json' } })
-    if (r.status === 404) {
-      const go = await ask('That repo looks private or missing (GitHub 404). Continue anyway? (y/N)', 'N')
-      if (String(go).toLowerCase() !== 'y') { console.log('Aborting. Make the repo public, then re-run.'); process.exit(1) }
-    }
-  } catch { /* network hiccup; continue */ }
-}
-function findUrl(obj) {
-  if (!obj) return ''
-  const sd = obj.serviceDetails || (obj.service && obj.service.serviceDetails) || {}
-  return sd.url || obj.url || ''
-}
 async function fetchT(url, init, ms = 15000) {
   const c = new AbortController(); const t = setTimeout(() => c.abort(), ms)
   try { return await fetch(url, { ...(init || {}), signal: c.signal }) } finally { clearTimeout(t) }
 }
-async function renderGET(key, path) {
-  const r = await fetchT(`${RENDER_API}${path}`, { headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' } })
-  const body = await r.text()
-  if (!r.ok) throw new Error(`Render GET ${path} -> HTTP ${r.status}: ${body.slice(0, 300)}`)
-  return body ? JSON.parse(body) : null
-}
-async function renderPOST(key, path, payload) {
-  const r = await fetchT(`${RENDER_API}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) })
-  const body = await r.text()
-  if (!r.ok) throw new Error(`Render POST ${path} -> HTTP ${r.status}: ${body.slice(0, 400)}`)
-  return body ? JSON.parse(body) : {}
-}
-async function renderPUT(key, path, payload) {
-  const r = await fetchT(`${RENDER_API}${path}`, { method: 'PUT', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) })
-  const body = await r.text()
-  if (!r.ok) throw new Error(`Render PUT ${path} -> HTTP ${r.status}: ${body.slice(0, 400)}`)
-  return body ? JSON.parse(body) : {}
-}
-async function pollDeploy(key, serviceId, deployId) {
-  const TERMINAL_BAD = new Set(['build_failed', 'update_failed', 'canceled', 'deactivated', 'pre_deploy_failed'])
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 15000))
-    try {
-      let status
-      if (deployId) {
-        const d = await renderGET(key, `/services/${serviceId}/deploys/${deployId}`)
-        status = (d.deploy || d).status
-      } else {
-        const arr = await renderGET(key, `/services/${serviceId}/deploys?limit=1`)
-        status = (arr[0] && (arr[0].deploy || arr[0]).status) || 'unknown'
-      }
-      console.log(`  [${i + 1}] status=${status}`)
-      if (status === 'live') return true
-      if (TERMINAL_BAD.has(status)) return false
-    } catch (e) { console.log('  (poll error, retrying): ' + e.message) }
+
+async function main() {
+  log('\n=== OpenCode (Azure Foundry edition) — install ===')
+  log('This configures Daytona (self-hosted), Azure Foundry (Entra), and corporate')
+  log('SSO, live-tests them, and writes .env + opencode.json so the app just works.\n')
+
+  const cfg = {}
+
+  // ---------- 1. Self-hosted Daytona ----------
+  log('--- Self-hosted Daytona ---')
+  cfg.DAYTONA_API_URL = await askReq('Daytona API base URL (your self-hosted control plane, e.g. https://daytona.firm.internal/api)', process.env.DAYTONA_API_URL)
+  cfg.DAYTONA_API_KEY = await askReq('Daytona API key', process.env.DAYTONA_API_KEY)
+  cfg.DAYTONA_TARGET = await ask('Daytona target/region (optional)', process.env.DAYTONA_TARGET || '')
+  await testDaytona(cfg)
+
+  // ---------- 2. Azure Foundry ----------
+  log('\n--- Azure AI Foundry ---')
+  cfg.AZURE_FOUNDRY_BASE_URL = await askReq('Foundry base endpoint URL (e.g. https://my-res.services.ai.azure.com)', process.env.AZURE_FOUNDRY_BASE_URL)
+  cfg.AZURE_FOUNDRY_BASE_URL = cfg.AZURE_FOUNDRY_BASE_URL.replace(/\/$/, '')
+  cfg.AZURE_API_VERSION = await ask('Foundry API version (blank for v1 GA, else e.g. 2025-04-01-preview)', process.env.AZURE_API_VERSION || '')
+  const deploymentsRaw = await askReq('Deployment name(s), comma-separated (must match Azure exactly, e.g. gpt-4o,gpt-5.5)', process.env.AZURE_DEPLOYMENTS)
+  const deployments = deploymentsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+  cfg.AZURE_DEFAULT_DEPLOYMENT = deployments.length === 1
+    ? deployments[0]
+    : await askReq('Default deployment (one of: ' + deployments.join(', ') + ')', process.env.AZURE_DEFAULT_DEPLOYMENT)
+
+  // Auth mode: Entra (managed identity) primary, API key fallback.
+  const useEntra = await askYN('Authenticate to Foundry with Entra managed identity (recommended; no API key)?', true)
+  cfg.AZURE_AUTH_MODE = useEntra ? 'entra' : 'apikey'
+  if (!useEntra) {
+    cfg.AZURE_API_KEY = await askReq('Foundry API key', process.env.AZURE_API_KEY)
   }
-  return false
+  cfg.AZURE_TOKEN_SCOPE = await ask('Entra token scope for Foundry', process.env.AZURE_TOKEN_SCOPE || 'https://cognitiveservices.azure.com/.default')
+  await testFoundry(cfg, deployments)
+
+  // ---------- 3. Corporate Entra SSO (app login) ----------
+  log('\n--- Corporate SSO (Entra) ---')
+  const wantSSO = await askYN('Require corporate Microsoft (Entra) sign-in to use the app?', true)
+  if (wantSSO) {
+    cfg.ENTRA_TENANT_ID = await askReq('Entra tenant ID (directory ID)', process.env.ENTRA_TENANT_ID)
+    cfg.ENTRA_CLIENT_ID = await askReq('Entra app (client) ID', process.env.ENTRA_CLIENT_ID)
+    cfg.ENTRA_CLIENT_SECRET = await askReq('Entra client secret', process.env.ENTRA_CLIENT_SECRET)
+    cfg.APP_BASE_URL = await ask('App base URL (where users reach this, e.g. https://opencode.firm.internal)', process.env.APP_BASE_URL || '')
+    cfg.SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')
+    log('  (generated a SESSION_SECRET)')
+    if (cfg.APP_BASE_URL) {
+      log('  IMPORTANT: in the Entra app registration, add this redirect URI:')
+      log('    ' + cfg.APP_BASE_URL.replace(/\/$/, '') + '/auth/callback')
+    }
+  } else {
+    log('  SSO disabled — anyone who can reach the app URL can use it (rely on network access controls).')
+  }
+
+  // ---------- 4. Write files ----------
+  writeEnv(cfg)
+  writeOpencodeJson(cfg, deployments)
+
+  log('\n========================================')
+  log('Setup complete. Wrote .env and opencode.json.')
+  log('Next:')
+  log('  npm run build')
+  log('  npm start         # local check, or build the Docker image for your VNet')
+  log('Deploy the container into your Azure VNet (see README / Dockerfile).')
+  log('========================================\n')
+  rl && rl.close()
 }
 
-main()
+// ---------- live tests ----------
+async function testDaytona(cfg) {
+  log('Testing Daytona connectivity...')
+  try {
+    const { Daytona } = await import('@daytona/sdk')
+    const opts = { apiKey: cfg.DAYTONA_API_KEY }
+    if (cfg.DAYTONA_API_URL) opts.apiUrl = cfg.DAYTONA_API_URL
+    if (cfg.DAYTONA_TARGET) opts.target = cfg.DAYTONA_TARGET
+    const d = new Daytona(opts)
+    for await (const _sb of d.list()) break // any auth-ed call
+    log('  ✓ Daytona reachable and authenticated.')
+  } catch (e) {
+    log('  ✗ Daytona test failed: ' + (e?.message || e))
+    if (!(await askYN('  Continue anyway?', false))) { rl && rl.close(); process.exit(1) }
+  }
+}
+
+async function testFoundry(cfg, deployments) {
+  log('Testing Azure Foundry endpoint...')
+  // 1. get auth (token via managed identity, or key)
+  let authHeader = {}
+  if (cfg.AZURE_AUTH_MODE === 'entra') {
+    try {
+      const { DefaultAzureCredential } = await import('@azure/identity')
+      const cred = new DefaultAzureCredential()
+      const tok = await cred.getToken(cfg.AZURE_TOKEN_SCOPE)
+      if (!tok?.token) throw new Error('no token returned')
+      authHeader = { Authorization: 'Bearer ' + tok.token }
+      log('  ✓ Acquired Entra token (managed identity / dev credential).')
+    } catch (e) {
+      log('  ✗ Could not get Entra token: ' + (e?.message || e))
+      log('    (This is expected if you are NOT running inside the VNet with a managed identity.')
+      log('     The deployed app will acquire the token at runtime. Skipping live Foundry call.)')
+      return
+    }
+  } else {
+    authHeader = { 'api-key': cfg.AZURE_API_KEY }
+  }
+  // 2. probe the endpoint shape: try v1 chat completions, then deployment-based.
+  const dep = deployments[0]
+  const v = cfg.AZURE_API_VERSION
+  const candidates = [
+    { label: 'v1 chat completions', url: cfg.AZURE_FOUNDRY_BASE_URL + '/openai/v1/chat/completions' + (v ? `?api-version=${v}` : ''), shape: 'v1' },
+    { label: 'deployment chat completions', url: cfg.AZURE_FOUNDRY_BASE_URL + `/openai/deployments/${dep}/chat/completions` + (v ? `?api-version=${v}` : '?api-version=2025-04-01-preview'), shape: 'deployment' },
+  ]
+  for (const c of candidates) {
+    try {
+      const body = JSON.stringify({ model: dep, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 })
+      const r = await fetchT(c.url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader }, body }, 20000)
+      log(`  [${c.label}] HTTP ${r.status}`)
+      if (r.ok) { log('  ✓ Foundry responded successfully via ' + c.label + '.'); cfg.AZURE_URL_SHAPE = c.shape; return }
+      if (r.status === 401 || r.status === 403) { log('  ✗ Auth rejected (check token scope / RBAC role on the resource).'); }
+    } catch (e) { log(`  [${c.label}] error: ${e?.message || e}`) }
+  }
+  log('  ! Could not confirm a working Foundry call. Verify endpoint/deployment/version with your team.')
+  if (!(await askYN('  Continue anyway?', false))) { rl && rl.close(); process.exit(1) }
+}
+
+// ---------- file writers ----------
+function writeEnv(cfg) {
+  const lines = ['# Generated by `npm run setup`. Do NOT commit. (gitignored)']
+  const put = (k) => { if (cfg[k] !== undefined && cfg[k] !== '') lines.push(`${k}=${cfg[k]}`) }
+  ;['DAYTONA_API_URL','DAYTONA_API_KEY','DAYTONA_TARGET',
+    'AZURE_FOUNDRY_BASE_URL','AZURE_API_VERSION','AZURE_DEFAULT_DEPLOYMENT','AZURE_AUTH_MODE','AZURE_API_KEY','AZURE_TOKEN_SCOPE',
+    'ENTRA_TENANT_ID','ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','SESSION_SECRET','APP_BASE_URL'].forEach(put)
+  fs.writeFileSync('.env', lines.join('\n') + '\n')
+  log('  wrote .env (' + (lines.length - 1) + ' settings)')
+}
+
+function writeOpencodeJson(cfg, deployments) {
+  // Azure Foundry provider config. resourceName is intentionally NOT set for
+  // Foundry (cognitiveservices/services.ai domains) — baseURL drives the URL.
+  const models = {}
+  for (const d of deployments) models[d] = { name: d }
+  const provider = {
+    azure: {
+      options: {
+        baseURL: cfg.AZURE_FOUNDRY_BASE_URL + '/openai/v1',
+      },
+      models,
+    },
+  }
+  if (cfg.AZURE_API_VERSION) provider.azure.options.apiVersion = cfg.AZURE_API_VERSION
+  // Auth: apikey via env; entra token via env (read by the launcher/runtime).
+  if (cfg.AZURE_AUTH_MODE === 'apikey') provider.azure.options.apiKey = '{env:AZURE_API_KEY}'
+  else provider.azure.options.apiKey = '{env:AZURE_FOUNDRY_TOKEN}'
+  const out = {
+    $schema: 'https://opencode.ai/config.json',
+    provider,
+    model: 'azure/' + cfg.AZURE_DEFAULT_DEPLOYMENT,
+  }
+  fs.writeFileSync('opencode.json', JSON.stringify(out, null, 2) + '\n')
+  log('  wrote opencode.json (default model azure/' + cfg.AZURE_DEFAULT_DEPLOYMENT + ')')
+}
+
+main().catch((e) => { log('\nSetup failed: ' + (e?.message || e)); rl && rl.close(); process.exit(1) })

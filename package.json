@@ -1,7 +1,7 @@
 {
-  "name": "opencode-daytona-launcher",
+  "name": "opencode-foundry-launcher",
   "version": "1.0.0",
-  "description": "Backend that launches OpenCode Web inside on-demand Daytona sandboxes (per the Daytona OpenCode Web guide).",
+  "description": "OpenCode in self-hosted Daytona sandboxes, defaulted to Azure AI Foundry, gated by Entra SSO. Firm-internal, VNet-deployed.",
   "main": "dist/server.js",
   "engines": {
     "node": ">=18"
@@ -10,8 +10,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js",
-    "setup": "node setup.mjs",
-    "deploy": "node deploy.mjs"
+    "setup": "node setup.mjs"
   },
   "keywords": [
     "opencode",
@@ -21,6 +20,8 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@azure/identity": "^4.13.1",
+    "@azure/msal-node": "^5.2.4",
     "@daytona/sdk": "^0.186.0",
     "express": "^4.19.2"
   },

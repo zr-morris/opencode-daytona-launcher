@@ -1,320 +1,151 @@
-# OpenCode on Daytona — Launcher
+# OpenCode — Azure Foundry Edition (internal)
 
-Launch the [OpenCode](https://opencode.ai/) AI coding agent inside **on-demand
-[Daytona](https://www.daytona.io/) sandboxes**, straight from your browser. Click
-**Launch**, get a private OpenCode Web URL in ~30–60s, and start coding. Run
-several at once, watch your free-tier quota live, and clean up with one click.
+OpenCode AI coding workspaces, running in **self-hosted Daytona sandboxes**,
+defaulted to your firm's **Azure AI Foundry** deployments, and gated by
+**corporate Entra SSO**. Designed to run **inside your Azure VNet** so it can
+reach a private Foundry endpoint.
 
-This is a small, **stateless, bring-your-own-keys (BYOK)** Express app designed to
-be trivially self-hosted on Render's free tier. You enter your own API keys in the
-UI; the server never stores them.
-
-> **Deploy your own copy in one command.** Just `git clone` this repo and run
-> `npm run setup` — it provisions a Render service in _your own_ Render account
-> and deploys this launcher for you (using your own keys). No fork required. See
-> [Deploy in one command](#deploy-in-one-command-recommended) below.
+> This is the firm-internal `azure-foundry` edition. It removes the public-cloud
+> bits of the original (Render deploy, GitHub login, BYOK key entry, usage
+> dashboards). Users sign in with their Microsoft account, name a workspace,
+> launch it, and open the link — that's it.
 
 ---
 
-## Features
+## What your users see
+- Sign in with their **corporate Microsoft account** (Entra SSO).
+- **Name a workspace** (e.g. "Q3 tax memo") and click **Launch**.
+- Open the workspace link → OpenCode, already defaulted to your Azure Foundry
+  model. No keys, no model setup, no configuration.
+- A list of their running workspaces with names + links; **Stop** when done.
 
-- **One-click OpenCode sandboxes** — provisions a Daytona sandbox, installs
-  OpenCode, and starts OpenCode Web, returning a ready-to-use preview URL.
-- **Reliable links** — a two-stage readiness check (server bound *and* the public
-  proxy route live) means the URL works the moment you receive it (no 502s).
-- **Run many at once** — every sandbox gets its own preview URL; copy any link to
-  open it on your phone or share it.
-- **Live free-tier dashboard** — gauges for vCPU / memory / disk against your
-  Daytona quota, a "slots remaining" headline, and per-sandbox resource chips.
-- **Cleanup controls** — **Stop** any sandbox, or **Stop all idle** to reclaim
-  quota from abandoned ones in one click.
-- **BYOK integrations** — connect **GitHub** (clone/push/PR), **Linear** (issue
-  linking, with team selection), and **Render**, each validated live in a Settings
-  drawer. The integration keys are injected into your sandboxes so OpenCode can use
-  them.
-
-> LLM connectivity is handled **natively by OpenCode** inside the sandbox — there's
-> no LLM key to configure here. The default model is OpenCode's free DeepSeek V4
-> Flash; switch models inside OpenCode as you like.
+No usage meters, no limits UI, no key entry — kept deliberately simple.
 
 ---
 
-## How it works
-
+## Architecture (VNet)
 ```
-Browser (your keys in localStorage)
-   │  X-Daytona-Key / X-GitHub-Token / X-Linear-Key / X-Render-Key  (per request)
-   ▼
-Launcher (this app, stateless — never stores keys)
-   │  @daytona/sdk
-   ▼
-Daytona sandbox  →  installs OpenCode  →  `opencode web`  →  public preview URL
+User (corp network)
+  → internal LB / App Gateway
+    → Launcher container (Azure Container Apps / AKS)  ── in VNet
+       • Entra SSO for app access
+       • Managed identity → Entra token for Foundry (no API key)
+      → self-hosted Daytona control plane  ── in VNet
+        → OpenCode sandbox (egress stays in-VNet)
+          → Azure AI Foundry private endpoint  ✔ reachable
 ```
-
-- **Stateless server.** Keys are sent with each request as `X-*` headers and used
-  only for that request. Nothing is persisted server-side.
-- **Keys live in your browser.** They're stored in `localStorage` and sent
-  directly to your own Daytona / GitHub / Linear / Render.
-- **Daytona as the gate.** The app is locked until you provide a valid Daytona key.
+Everything runs inside (or peered with) the VNet that has the Foundry private
+endpoint + private DNS. Nothing calls Foundry over the public internet.
 
 ---
 
-## Deploy in one command (recommended)
+## Install (DevOps)
 
-The fastest way to self-host: **`git clone` this repo** and run the setup CLI,
-which **programmatically creates a Render web service in your own Render account**
-and deploys this launcher — no fork and no dashboard clicking required. Your
-service runs in _your_ Render account with _your_ keys; you're just deploying
-this public codebase.
+Run the guided setup on a host that can reach your self-hosted Daytona and
+(ideally) the Foundry endpoint, so the live tests pass.
 
 ```bash
-git clone https://github.com/zr-morris/opencode-daytona-launcher.git
+git clone -b azure-foundry https://github.com/zr-morris/opencode-daytona-launcher.git
 cd opencode-daytona-launcher
 npm install
 npm run setup
 ```
 
-> **Want to customize the code?** Fork the repo first, clone your fork instead,
-> and `npm run setup` will deploy from your fork. Otherwise, cloning this repo is
-> all you need.
+`npm run setup` will prompt for, and **live-test**:
+- **Self-hosted Daytona** — API base URL + key (verifies an authenticated call).
+- **Azure Foundry** — base endpoint URL, API version (blank for v1 GA),
+  deployment name(s) + default, and auth mode (**Entra managed identity** —
+  recommended — or API key). It probes the endpoint to confirm a working call
+  and which URL shape to use.
+- **Corporate Entra SSO** — tenant ID, app (client) ID, client secret, app base
+  URL. (Generates a `SESSION_SECRET`.)
 
-`npm run setup` will:
-- Auto-detect your repo URL from git (confirm or override). **The repo must be
-  public** — Render's API can only auto-create a service from a public repo URL
-  without a browser GitHub connection.
-- Prompt for your **Render API key** (creates the service) and **Daytona key**
-  (baked into the deploy, so the web onboarding skips the Daytona step).
-- Optionally enable the **GitHub login gate** (Client ID/Secret + allowlist; a
-  `SESSION_SECRET` is generated for you).
-- Create the service (free plan), set env vars, deploy, wait until it's live, and
-  print your URL.
+It writes:
+- **`.env`** — settings + secrets (gitignored; never committed).
+- **`opencode.json`** — the Azure Foundry provider + deployments + default model
+  (gitignored by default since it references your internal endpoint).
 
-You can also run it non-interactively with env vars:
+Then:
 ```bash
-RENDER_API_KEY=... DAYTONA_API_KEY=... npm run setup
-```
-
-> **Public-repo services don't auto-deploy.** After any code change is pushed to
-> the repo you deployed from, redeploy with:
-> ```bash
-> npm run deploy
-> ```
-
-> Get your keys: **Render** → https://dashboard.render.com/u/settings#api-keys ·
-> **Daytona** → https://app.daytona.io (free tier). GitHub login + Linear are set
-> up later (see below).
-
-### Alternative: deploy via the Render dashboard
-
-Prefer clicking through Render's UI instead of the CLI? You can deploy from a
-public Git repo URL (no fork needed), or fork first if you want auto-deploys and
-customization.
-
-### 1. (Optional) Fork, if you want to customize or get auto-deploys
-Connecting your own fork to Render via your Git provider enables auto-deploys on
-push. Deploying from a public repo URL (this repo) works too, but such services
-must be redeployed manually.
-
-### 2. Create a Render web service
-In the [Render dashboard](https://dashboard.render.com): **New → Web Service**,
-then either connect your fork or choose **Public Git Repository** and paste this
-repo's URL (https://github.com/zr-morris/opencode-daytona-launcher). Render will
-detect [`render.yaml`](./render.yaml) (a
-free, zero-env Blueprint). If you create the service manually instead, use:
-
-- **Runtime:** Node
-- **Build Command:** `npm install && npm run build`
-- **Start Command:** `npm start`
-- **Health Check Path:** `/healthz`
-
-### 3. Open the URL and add your keys
-No environment variables are required. When the service is live, open its URL and
-paste your **Daytona** key in the onboarding screen. Add GitHub / Linear / Render
-in **Settings** as needed. Your keys live in your browser, not on the server.
-
-> **Heads-up (Render free tier):** free web services sleep after inactivity, so the
-> first request after idle takes a few extra seconds to wake.
-
-> **Who can use your instance?** Because keys are entered per-browser (BYOK), the
-> _server_ holds no secrets — but anyone who can open your URL can use the app with
-> _their own_ keys, and (see [Security model](#security-model)) `localStorage` is
-> not isolation between untrusted users. Keep your instance to people you trust, or
-> put it behind your own auth/VPN if you expose it more widely.
-
----
-
-## Getting your API keys
-
-You only need **Daytona** to start. The rest are optional and unlock extra powers.
-
-### Daytona  *(required)*
-1. Sign in at **https://app.daytona.io** (free tier available).
-2. Create an **API key** in your account settings.
-3. Paste it into the launcher's onboarding screen and pick your region (`us`/`eu`).
-
-The free tier ("Tier 1") gives a shared pool of **10 vCPU / 10 GiB RAM / 30 GiB
-disk**. Each OpenCode sandbox uses 1 vCPU / 2 GiB / 5 GiB, so you can run a handful
-concurrently — the dashboard shows exactly how many "slots" remain.
-
-### GitHub  *(optional)*
-1. Create a token at **https://github.com/settings/tokens**.
-2. A classic token with the **`repo`** scope (or a fine-grained token with
-   repository contents read/write) works well.
-3. Add it in **Settings → GitHub**. Once connected, the launcher configures git
-   inside each sandbox so OpenCode can clone, commit, push, and open PRs as you.
-
-### Linear  *(optional)*
-1. Go to **https://linear.app/settings/api** → **Personal API keys** →
-   **Create key**.
-2. Add it in **Settings → Linear**. After it validates, pick which **team** to use
-   from the dropdown (the free tier supports up to 2 teams).
-3. The key and selected team are injected into your sandboxes so OpenCode can link
-   work to Linear issues.
-
-### Render  *(optional)*
-1. Create a key at **https://dashboard.render.com/u/settings#api-keys**.
-2. Add it in **Settings → Render**. It's validated against your Render account and
-   injected into sandboxes for self-host automation and future "deploy what
-   OpenCode built" features.
-
----
-
-## Local development
-
-```bash
-# Clone this repo (or your fork, if you forked to customize).
-git clone https://github.com/zr-morris/opencode-daytona-launcher.git
-cd opencode-daytona-launcher
-npm install
 npm run build
-npm start
-# open http://localhost:3000
+npm start            # local sanity check
 ```
 
-No `.env` is required — enter your keys in the UI. If you'd rather pre-bake
-credentials (e.g. for a shared internal deployment), copy `.env.example` to `.env`
-and set any of the optional fallbacks; a request header always overrides the env
-value.
+### Deploy into the VNet
+Build the container and deploy to **Azure Container Apps** or **AKS** with
+**internal ingress only**, joined to the VNet that reaches Foundry + Daytona.
+
+```bash
+docker build -t <acr>.azurecr.io/opencode-foundry:latest .
+# push to ACR, then deploy to Container Apps/AKS with the .env values supplied
+# as environment variables (use Azure Key Vault references for secrets).
+```
+- Assign the compute a **managed identity** with the **Cognitive Services OpenAI
+  User** role on the Foundry resource (so `AZURE_AUTH_MODE=entra` works with no
+  key).
+- Provide the `opencode.json` to the container (mount it, bake it in, or supply
+  the equivalent `AZURE_*` env vars).
+- In the **Entra app registration**, add the redirect URI:
+  `https://<app-base-url>/auth/callback`.
 
 ---
 
-## Security model
-
-- **Your keys stay in your browser.** They're stored in `localStorage` and sent
-  per-request as `X-*` headers directly to your own service accounts.
-- **The server is stateless.** It never persists keys to disk or a database, and it
-  never logs full key values (only presence/last-4 for diagnostics).
-- **Trade-off:** `localStorage` is readable by any JavaScript running on the page,
-  so this design assumes a **trusted, self-hosted** deployment for you and your
-  team — not an untrusted public multi-tenant SaaS. Don't deploy a shared instance
-  and hand the URL to strangers expecting key isolation.
-- **Sandbox previews are public.** Launched sandboxes use Daytona public preview
-  URLs (so links work on mobile with no login). Treat those URLs as
-  unauthenticated; don't put secrets in a sandbox you've shared.
-
----
-
-## Locking down your instance (GitHub login)
-
-By default the app is **open** — anyone who can reach the URL can use it (with
-their own keys). To restrict access, enable the optional **GitHub OAuth login
-gate**.
-
-> **Do this in the right order** (the callback URL depends on your live URL):
-> 1. **Deploy first** (steps above) and note your service URL,
->    `https://<your-service>.onrender.com`.
-> 2. **Create the GitHub OAuth app** using *that* URL for the callback (below).
-> 3. **Add the env vars** to your Render service and let it redeploy.
->
-> You can't create the OAuth app before deploying, because GitHub needs your
-> real callback URL. The app auto-detects its own URL, so you don't need to
-> hardcode it (though you may set `APP_BASE_URL` to be explicit). When enabled, visitors must sign in with GitHub before they can load the
-app or call any API, and that **same login auto-connects GitHub for OpenCode** —
-the user's OAuth token (with `repo` scope) is injected into their sandboxes, so
-there's no separate GitHub PAT to enter.
-
-### 1. Create a GitHub OAuth app
-Go to **https://github.com/settings/developers → New OAuth App**:
-- **Application name:** anything (e.g. "OpenCode Launcher").
-- **Homepage URL:** `https://<your-service>.onrender.com`  *(your real Render URL)*
-- **Authorization callback URL:** `https://<your-service>.onrender.com/auth/github/callback`
-
-> Replace `<your-service>` with your actual Render service URL from step 1 — do
-> **not** use someone else's URL.
-
-Create it, then **Generate a new client secret**. You'll get a **Client ID** and
-**Client Secret**.
-
-### 2. Set environment variables on your Render service
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `GITHUB_CLIENT_ID` | yes (to enable login) | OAuth app client ID |
-| `GITHUB_CLIENT_SECRET` | yes (to enable login) | OAuth app client secret |
-| `ALLOWED_GITHUB_USERS` | recommended | Comma-separated GitHub usernames allowed to sign in |
-| `ALLOWED_GITHUB_ORG` | recommended | A GitHub org whose members are allowed to sign in |
-| `SESSION_SECRET` | recommended | Long random string; signs session cookies (keeps logins across restarts) |
-| `APP_BASE_URL` | optional | Force the callback base URL, e.g. `https://your-service.onrender.com` |
-
-Setting **both** `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` turns login on.
-Leaving them unset keeps the app open (handy for local dev).
-
-> **Always set an allowlist when login is enabled.** Without
-> `ALLOWED_GITHUB_USERS` / `ALLOWED_GITHUB_ORG`, **any** GitHub user can sign in.
-> The login screen shows a warning if no allowlist is configured.
-
-### How login interacts with the integrations
-- **GitHub** becomes automatic — the login token is what OpenCode uses to clone/
-  push/PR. The GitHub card disappears from Settings when logged in this way.
-- **Linear** and **Render** remain bring-your-own-key in Settings (a GitHub login
-  can't authenticate other vendors' APIs).
-- Sessions are **stateless signed cookies** (HMAC-SHA256, httpOnly, Secure) — no
-  database or session store, so it stays free-tier friendly.
-
-> **Note on `repo` scope:** to push code on your behalf, the OAuth consent
-> requests the `repo` scope (read/write to your repos). If you prefer tighter,
-> per-repo permissions, a GitHub App (fine-grained tokens) is a future upgrade
-> path; this version uses an OAuth App for simplicity.
+## Configuration reference (env)
+| Variable | Purpose |
+| --- | --- |
+| `DAYTONA_API_URL` | Self-hosted Daytona control-plane base URL (in-VNet) |
+| `DAYTONA_API_KEY` | Daytona API key |
+| `DAYTONA_TARGET` | Optional Daytona target/region |
+| `AZURE_FOUNDRY_BASE_URL` | Foundry base endpoint, e.g. `https://res.services.ai.azure.com` |
+| `AZURE_API_VERSION` | Blank for v1 GA; else e.g. `2025-04-01-preview` |
+| `AZURE_DEFAULT_DEPLOYMENT` | Default deployment name (matches Azure exactly) |
+| `AZURE_AUTH_MODE` | `entra` (managed identity, default) or `apikey` |
+| `AZURE_API_KEY` | Only if `AZURE_AUTH_MODE=apikey` |
+| `AZURE_TOKEN_SCOPE` | Entra token scope (default cognitive services) |
+| `ENTRA_TENANT_ID` / `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | App SSO (blank disables sign-in) |
+| `SESSION_SECRET` | Signs session cookies |
+| `APP_BASE_URL` | Public app URL for the SSO redirect |
 
 ---
 
-## API reference
+## How auth works
+- **App access:** Entra SSO (MSAL auth-code flow). A signed, httpOnly session
+  cookie (8h) gates the app and all `/api/*`. No GitHub, no passwords.
+- **Foundry calls:** the launcher acquires a fresh **Entra token via the
+  compute's managed identity** at each launch (`DefaultAzureCredential` →
+  `cognitiveservices.azure.com/.default`) and injects it into the sandbox, so
+  OpenCode authenticates to Foundry with a bearer token — **no API key stored**.
+  (API-key mode is available as a fallback for non-managed-identity setups.)
 
-All sandbox endpoints read credentials from request headers (`X-Daytona-Key`,
-`X-Daytona-Target`, `X-GitHub-Token`, `X-Linear-Key`, `X-Linear-Team`,
-`X-Render-Key`), falling back to env vars if absent.
+> Token lifetime: tokens are acquired at launch. Very long-lived sessions may
+> need a relaunch when the token expires; for interactive use this is rarely hit.
 
+---
+
+## Endpoints
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/` | The web app (onboarding gate + dashboard + settings). |
-| `GET` | `/healthz` | Health check; reports which env fallbacks are present (booleans). |
-| `GET` | `/api/me` | Auth status: whether login is enabled and who is signed in. |
-| `GET` | `/login` | Sign-in page (when login is enabled). |
-| `GET` | `/auth/github` | Start GitHub OAuth. |
-| `GET` | `/auth/github/callback` | OAuth callback; sets the session cookie. |
-| `POST`/`GET` | `/auth/logout` | Clear the session. |
-| `POST` | `/api/launch` | Create a sandbox, start OpenCode Web; returns `{ url, token, sandboxId, webReady, publicReady }`. Injects GitHub/Linear/Render creds into the sandbox. |
-| `POST` | `/api/stop` | Body `{ "sandboxId": "..." }` — delete a sandbox. |
-| `POST` | `/api/stop-idle` | Body `{ "idleMinutes": 30 }` — delete launcher sandboxes idle beyond the threshold. |
-| `GET` | `/api/sandboxes` | List live launcher sandboxes (label-scoped) with per-sandbox resources. |
-| `GET` | `/api/usage` | Account-wide usage vs the free-tier pool + `slotsRemaining`. |
-| `POST` | `/api/validate/daytona` | Validate a Daytona key. |
-| `POST` | `/api/validate/github` | Validate a GitHub PAT; returns `{ login, name, avatarUrl }`. |
-| `POST` | `/api/validate/linear` | Validate a Linear key; returns `{ viewer, teams }`. |
-| `POST` | `/api/validate/render` | Validate a Render key; returns `{ owners }`. |
+| `GET` | `/` | The app (requires SSO when enabled) |
+| `GET` | `/healthz` | Health + config status |
+| `GET` | `/api/me` | Sign-in status |
+| `GET` | `/login`, `/auth/login`, `/auth/callback`, `/auth/logout` | Entra SSO |
+| `POST` | `/api/launch` | Launch a (optionally named) workspace |
+| `POST` | `/api/stop` | Stop/delete a workspace |
+| `GET` | `/api/sandbox-status?id=...` | Poll a workspace until gone |
+| `GET` | `/api/sandboxes` | List running workspaces (label-scoped) |
 
-Sandboxes created by this app are tagged with the label `app=opencode-launcher`,
-so listing/stopping only ever touches sandboxes it created.
+Sandboxes are labeled `app=opencode-foundry`; listing/stopping only touches ones
+this app created. A workspace's display name is stored as a Daytona label.
 
 ---
 
-## Tech
-
-- Node + Express + TypeScript, single file (`src/server.ts`), vanilla-JS frontend.
-- [`@daytona/sdk`](https://www.npmjs.com/package/@daytona/sdk) for sandbox
-  lifecycle and preview links.
-- Built per the official
-  [Daytona OpenCode Web Agent guide](https://www.daytona.io/docs/en/guides/opencode/opencode-web-agent/).
+## Notes / caveats
+- **Must run in-VNet** for a private Foundry endpoint. Managed Daytona's cloud
+  sandboxes can't reach a private endpoint — use **self-hosted Daytona in-VNet**.
+- The exact Foundry URL shape (v1 vs deployment-based, `api-version` needed or
+  not) varies by resource; `npm run setup` probes it and the config uses the
+  `/openai/v1` form with `@ai-sdk/azure`. If your endpoint differs, adjust
+  `opencode.json`'s `provider.azure.options.baseURL`.
 
 ## License
-
 MIT
