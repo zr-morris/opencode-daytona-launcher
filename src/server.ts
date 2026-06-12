@@ -1338,6 +1338,7 @@ async function launch() {
     const r = await fetch('/api/launch', { method: 'POST', headers: authHeaders() })
     const d = await r.json()
     if (!r.ok) throw new Error(d.error || 'Launch failed')
+    out.setAttribute('data-sandbox', d.sandboxId || '')
     out.innerHTML = 'OpenCode Web is ready!<br><br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>' + '<br><br><span class="muted">All your running instances and their links are listed below under <b>Active OpenCode sandboxes</b>.</span>'
     btn.textContent = 'Launch another'
     refreshAll()
@@ -1483,6 +1484,16 @@ async function refresh() {
 // mid-flight list render doesn't reset the 'Stopping...' button.
 var STOPPING = {}
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
+// Clear the 'OpenCode Web is ready!' box if it's showing the given sandbox.
+function clearReadyBoxIf(id) {
+  var out = document.getElementById('out')
+  if (!out) return
+  if (out.getAttribute('data-sandbox') === id) {
+    out.style.display = 'none'
+    out.innerHTML = ''
+    out.removeAttribute('data-sandbox')
+  }
+}
 
 async function stop(id, btn) {
   if (!confirm('Stop and delete sandbox ' + short(id) + '? This cannot be undone.')) return
@@ -1511,6 +1522,7 @@ async function stop(id, btn) {
     // deleting regardless).
     var row = document.querySelector('.row[data-sandbox="' + id + '"]')
     if (row && row.parentNode) row.parentNode.removeChild(row)
+    clearReadyBoxIf(id)
     var listEl = document.getElementById('list')
     var statusEl = document.getElementById('listStatus')
     var remaining = listEl ? listEl.querySelectorAll('.row').length : 0
@@ -1542,6 +1554,7 @@ async function stopIdle() {
       markStopped(sid)
       var rr = document.querySelector('.row[data-sandbox="' + sid + '"]')
       if (rr && rr.parentNode) rr.parentNode.removeChild(rr)
+      clearReadyBoxIf(sid)
     })
     var msg = n === 0 ? 'No idle sandboxes to stop (nothing idle > ' + IDLE_MINUTES + 'm).' : ('Stopped ' + n + ' idle sandbox' + (n === 1 ? '' : 'es') + '.')
     if (d.failed && d.failed.length) msg += ' ' + d.failed.length + ' failed.'
