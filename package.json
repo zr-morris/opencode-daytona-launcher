@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "tsc && node dist/server.js"
+    "dev": "tsc && node dist/server.js",
+    "setup": "node setup.mjs",
+    "deploy": "node deploy.mjs"
   },
   "keywords": [
     "opencode",
