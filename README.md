@@ -9,10 +9,9 @@ This is a small, **stateless, bring-your-own-keys (BYOK)** Express app designed 
 be trivially self-hosted on Render's free tier. You enter your own API keys in the
 UI; the server never stores them.
 
-> **Deploy your own copy in minutes.** Fork this repo, connect _your_ fork to
-> _your own_ Render account, and you're done — no environment variables required,
-> because every user enters their own keys in the UI. See
-> [Deploy to Render](#deploy-to-render-fork-first) below.
+> **Deploy your own copy in one command.** Clone or fork, then run `npm run setup`
+> — it provisions a Render service in _your own_ Render account and deploys this
+> launcher for you. See [Deploy in one command](#deploy-in-one-command-recommended) below.
 
 ---
 
@@ -59,7 +58,46 @@ Daytona sandbox  →  installs OpenCode  →  `opencode web`  →  public previe
 
 ---
 
-## Deploy to Render (fork first)
+## Deploy in one command (recommended)
+
+The fastest way to self-host: clone (or fork), then run the setup CLI, which
+**programmatically creates a Render web service in your own Render account** and
+deploys this launcher — no dashboard clicking required.
+
+```bash
+git clone https://github.com/YOUR-USERNAME/opencode-daytona-launcher.git
+cd opencode-daytona-launcher
+npm install
+npm run setup
+```
+
+`npm run setup` will:
+- Auto-detect your repo URL from git (confirm or override). **The repo must be
+  public** — Render's API can only auto-create a service from a public repo URL
+  without a browser GitHub connection.
+- Prompt for your **Render API key** (creates the service) and **Daytona key**
+  (baked into the deploy, so the web onboarding skips the Daytona step).
+- Optionally enable the **GitHub login gate** (Client ID/Secret + allowlist; a
+  `SESSION_SECRET` is generated for you).
+- Create the service (free plan), set env vars, deploy, wait until it's live, and
+  print your URL.
+
+You can also run it non-interactively with env vars:
+```bash
+RENDER_API_KEY=... DAYTONA_API_KEY=... npm run setup
+```
+
+> **Public-repo services don't auto-deploy.** After you push changes to your fork,
+> redeploy with:
+> ```bash
+> npm run deploy
+> ```
+
+> Get your keys: **Render** → https://dashboard.render.com/u/settings#api-keys ·
+> **Daytona** → https://app.daytona.io (free tier). GitHub login + Linear are set
+> up later (see below).
+
+### Alternative: deploy via the Render dashboard (fork first)
 
 > **Important — deploy from _your own_ fork, not someone else's repo.** This app
 > is meant to be self-hosted. Always fork it into your own GitHub account and
