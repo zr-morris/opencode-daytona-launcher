@@ -9,9 +9,10 @@ This is a small, **stateless, bring-your-own-keys (BYOK)** Express app designed 
 be trivially self-hosted on Render's free tier. You enter your own API keys in the
 UI; the server never stores them.
 
-> **Deploy your own copy in one command.** Clone or fork, then run `npm run setup`
-> — it provisions a Render service in _your own_ Render account and deploys this
-> launcher for you. See [Deploy in one command](#deploy-in-one-command-recommended) below.
+> **Deploy your own copy in one command.** Just `git clone` this repo and run
+> `npm run setup` — it provisions a Render service in _your own_ Render account
+> and deploys this launcher for you (using your own keys). No fork required. See
+> [Deploy in one command](#deploy-in-one-command-recommended) below.
 
 ---
 
@@ -60,16 +61,22 @@ Daytona sandbox  →  installs OpenCode  →  `opencode web`  →  public previe
 
 ## Deploy in one command (recommended)
 
-The fastest way to self-host: clone (or fork), then run the setup CLI, which
-**programmatically creates a Render web service in your own Render account** and
-deploys this launcher — no dashboard clicking required.
+The fastest way to self-host: **`git clone` this repo** and run the setup CLI,
+which **programmatically creates a Render web service in your own Render account**
+and deploys this launcher — no fork and no dashboard clicking required. Your
+service runs in _your_ Render account with _your_ keys; you're just deploying
+this public codebase.
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/opencode-daytona-launcher.git
+git clone https://github.com/zr-morris/opencode-daytona-launcher.git
 cd opencode-daytona-launcher
 npm install
 npm run setup
 ```
+
+> **Want to customize the code?** Fork the repo first, clone your fork instead,
+> and `npm run setup` will deploy from your fork. Otherwise, cloning this repo is
+> all you need.
 
 `npm run setup` will:
 - Auto-detect your repo URL from git (confirm or override). **The repo must be
@@ -87,8 +94,8 @@ You can also run it non-interactively with env vars:
 RENDER_API_KEY=... DAYTONA_API_KEY=... npm run setup
 ```
 
-> **Public-repo services don't auto-deploy.** After you push changes to your fork,
-> redeploy with:
+> **Public-repo services don't auto-deploy.** After any code change is pushed to
+> the repo you deployed from, redeploy with:
 > ```bash
 > npm run deploy
 > ```
@@ -97,21 +104,22 @@ RENDER_API_KEY=... DAYTONA_API_KEY=... npm run setup
 > **Daytona** → https://app.daytona.io (free tier). GitHub login + Linear are set
 > up later (see below).
 
-### Alternative: deploy via the Render dashboard (fork first)
+### Alternative: deploy via the Render dashboard
 
-> **Important — deploy from _your own_ fork, not someone else's repo.** This app
-> is meant to be self-hosted. Always fork it into your own GitHub account and
-> connect _your_ fork to _your_ Render account. There is intentionally **no
-> "one-click deploy from this repo" button**: a shared deploy link would couple
-> your service to a repo you don't control and blur ownership of the instance.
+Prefer clicking through Render's UI instead of the CLI? You can deploy from a
+public Git repo URL (no fork needed), or fork first if you want auto-deploys and
+customization.
 
-### 1. Fork this repo
-Click **Fork** at the top of the GitHub page to copy it into your own account
-(e.g. `your-username/opencode-daytona-launcher`).
+### 1. (Optional) Fork, if you want to customize or get auto-deploys
+Connecting your own fork to Render via your Git provider enables auto-deploys on
+push. Deploying from a public repo URL (this repo) works too, but such services
+must be redeployed manually.
 
-### 2. Create a Render web service from your fork
+### 2. Create a Render web service
 In the [Render dashboard](https://dashboard.render.com): **New → Web Service**,
-then connect **your fork**. Render will detect [`render.yaml`](./render.yaml) (a
+then either connect your fork or choose **Public Git Repository** and paste this
+repo's URL (https://github.com/zr-morris/opencode-daytona-launcher). Render will
+detect [`render.yaml`](./render.yaml) (a
 free, zero-env Blueprint). If you create the service manually instead, use:
 
 - **Runtime:** Node
@@ -174,8 +182,8 @@ concurrently — the dashboard shows exactly how many "slots" remain.
 ## Local development
 
 ```bash
-# Clone your fork (replace YOUR-USERNAME), or the canonical repo to try it out.
-git clone https://github.com/YOUR-USERNAME/opencode-daytona-launcher.git
+# Clone this repo (or your fork, if you forked to customize).
+git clone https://github.com/zr-morris/opencode-daytona-launcher.git
 cd opencode-daytona-launcher
 npm install
 npm run build
