@@ -236,14 +236,19 @@ app.get('/favicon.ico', (_req: Request, res: Response) => res.redirect(301, '/fa
 
 // ---- Auth status endpoint (always available; tells the UI whether to show login) ----
 app.get('/api/me', (req: Request, res: Response) => {
-  if (!AUTH_ENABLED) return res.json({ authEnabled: false, authed: true })
+  // daytonaServerConfigured: the host baked in a Daytona key (e.g. via the
+  // setup CLI). When true, the onboarding can skip the Daytona step and the
+  // server uses its env key for API calls.
+  const daytonaServerConfigured = Boolean(process.env.DAYTONA_API_KEY)
+  if (!AUTH_ENABLED) return res.json({ authEnabled: false, authed: true, daytonaServerConfigured })
   const sess = getSession(req)
-  if (!sess) return res.json({ authEnabled: true, authed: false })
+  if (!sess) return res.json({ authEnabled: true, authed: false, daytonaServerConfigured })
   return res.json({
     authEnabled: true, authed: true,
     login: sess.login, name: sess.name, avatar: sess.avatar,
     // Tells the UI that GitHub is auto-connected via login (hide the PAT card).
     githubAuto: true,
+    daytonaServerConfigured,
   })
 })
 
@@ -1037,21 +1042,13 @@ const LANDING_HTML = `<!DOCTYPE html>
 <!-- Onboarding gate: shown until a valid Daytona key is set -->
 <div id="gate" class="gate hide">
   <h1>Welcome to OpenCode on Daytona</h1>
-  <p class="lead">This launcher spins up the OpenCode AI coding agent inside on-demand Daytona sandboxes. To get started, connect your Daytona account. Your key is stored only in this browser and sent directly to Daytona &mdash; this server never stores it.</p>
-  <div class="field">
-    <label for="gateKey">Daytona API key</label>
-    <div class="inwrap">
-      <input id="gateKey" type="password" placeholder="dtn_..." autocomplete="off" />
-      <button type="button" class="eye" onclick="toggleEye('gateKey', this)">show</button>
-    </div>
-  </div>
-  <div class="field">
-    <label for="gateTarget">Region</label>
-    <select id="gateTarget"><option value="us">us</option><option value="eu">eu</option></select>
-  </div>
-  <button id="gateBtn" class="btn-primary2 full" onclick="gateValidate()">Validate &amp; Continue</button>
+  <p class="lead">Set up your integrations to get started. <b>Daytona</b> is required (it runs the sandboxes); <b>GitHub</b>, <b>Linear</b>, and <b>Render</b> are optional. Keys are stored only in this browser and sent directly to each service &mdash; this server never stores them.</p>
+  <div class="disclosure" id="gateHostNote" style="display:none">Daytona was configured by the host for this instance &mdash; you can continue straight to the dashboard. The other integrations below are optional.</div>
+  <!-- shared integration cards get moved in here -->
+  <div id="gateCards"></div>
+  <button id="gateBtn" class="btn-primary2 full" style="margin-top:8px" onclick="gateContinue()" disabled>Connect Daytona to continue</button>
   <div id="gateErr" class="err"></div>
-  <div class="hintlink"><a href="https://app.daytona.io" target="_blank" rel="noopener">Where do I get a Daytona API key?</a> <span class="muted">&middot; free tier available</span></div>
+  <div class="hintlink"><span class="muted">New here? See the README for self-hosting and how to get each API key.</span></div>
 </div>
 
 <div id="app" class="card hide">
@@ -1223,6 +1220,7 @@ async function validateKey(p, key, extraHeaders) {
 // Render the populated/connected state for a provider from a validation result.
 function renderConnected(p, key, data) {
   setBadge(p, 'on'); setChip(p, true)
+  if (p === 'daytona') updateGateContinue()
   if (p === 'daytona') {
     showSaved(p, '<span>' + last4(key) + '</span><span class="muted">region ' + (lsGet(LS.daytonaTarget) || 'us') + '</span>')
   } else if (p === 'github') {
@@ -1281,8 +1279,11 @@ function disconnect(p) {
   setBadge(p, 'off'); setChip(p, false)
   showEdit(p)
   document.getElementById('err-' + p).textContent = ''
-  // Daytona disconnect returns user to the gate.
-  if (p === 'daytona') location.reload()
+  // Daytona disconnect: if the host hasn't baked in a key, return to the gate.
+  if (p === 'daytona') {
+    if (ACCOUNT && ACCOUNT.daytonaServerConfigured) { updateGateContinue() }
+    else { location.reload() }
+  }
 }
 
 // On drawer open / boot, reflect stored keys (without re-validating heavy ones,
@@ -1308,42 +1309,63 @@ async function hydrateDrawer() {
 }
 
 // ---- onboarding gate ----
+// Move the shared integration cards into the gate (onboarding) or the drawer.
+function moveCardsTo(containerId) {
+  var cards = document.getElementById('integrationCards')
+  var dest = document.getElementById(containerId)
+  if (cards && dest && cards.parentNode !== dest) dest.appendChild(cards)
+}
+
+// Daytona is "ready to continue" if the user has a stored Daytona key OR the
+// host baked one in (daytonaServerConfigured).
+function daytonaReady() {
+  return Boolean(lsGet(LS.daytonaKey)) || Boolean(ACCOUNT && ACCOUNT.daytonaServerConfigured)
+}
+function updateGateContinue() {
+  var btn = document.getElementById('gateBtn')
+  if (!btn) return
+  if (daytonaReady()) { btn.disabled = false; btn.textContent = 'Continue to dashboard \\u2192' }
+  else { btn.disabled = true; btn.textContent = 'Connect Daytona to continue' }
+  var note = document.getElementById('gateHostNote')
+  if (note) note.style.display = (ACCOUNT && ACCOUNT.daytonaServerConfigured && !lsGet(LS.daytonaKey)) ? 'block' : 'none'
+}
+
 function showGate() {
   document.getElementById('gate').classList.remove('hide')
   document.getElementById('app').classList.add('hide')
+  moveCardsTo('gateCards')
+  // Hydrate the cards so saved keys show as connected; then set the button state.
+  hydrateDrawer().then(updateGateContinue)
+  updateGateContinue()
 }
 function showApp() {
   document.getElementById('gate').classList.add('hide')
   document.getElementById('app').classList.remove('hide')
+  moveCardsTo('drawerCards')
   loadAccount().then(function () { hydrateDrawer() })
   refreshAll()
 }
-async function gateValidate() {
-  var btn = document.getElementById('gateBtn')
-  var key = (document.getElementById('gateKey').value || '').trim()
-  var target = document.getElementById('gateTarget').value || 'us'
-  var err = document.getElementById('gateErr')
-  err.textContent = ''
-  if (!key) { err.textContent = 'Enter your Daytona API key.'; return }
-  btn.disabled = true; btn.textContent = 'Validating...'
-  var data = await validateKey('daytona', key, { 'X-Daytona-Target': target })
-  btn.disabled = false; btn.textContent = 'Validate & Continue'
-  if (!data.ok) { err.textContent = data.error || 'Invalid key.'; return }
-  lsSet(LS.daytonaKey, key); lsSet(LS.daytonaTarget, target)
+function gateContinue() {
+  if (!daytonaReady()) { document.getElementById('gateErr').textContent = 'Connect Daytona first.'; return }
   showApp()
 }
 
 // ---- boot: decide gate vs app ----
 async function boot() {
+  // Load account first so we know whether the host baked in Daytona + login state.
+  await loadAccount()
   var key = lsGet(LS.daytonaKey)
+  // If the host configured Daytona (e.g. via setup CLI) and the user has no key
+  // of their own, go straight to the dashboard — the server uses its env key.
+  if (!key && ACCOUNT.daytonaServerConfigured) { showApp(); return }
   if (!key) { showGate(); return }
-  // Pre-fill gate target select from storage.
-  var gt = document.getElementById('gateTarget'); if (gt) gt.value = lsGet(LS.daytonaTarget) || 'us'
+  // Pre-fill drawer target select from storage.
   var dt = document.getElementById('in-daytona-target'); if (dt) dt.value = lsGet(LS.daytonaTarget) || 'us'
-  // Validate stored key; if good show app, else gate (prefilled).
+  // Validate stored key; if good show app, else gate.
   var data = await validateKey('daytona', key, { 'X-Daytona-Target': lsGet(LS.daytonaTarget) || 'us' })
   if (data.ok) { showApp() }
-  else { document.getElementById('gateKey').value = ''; showGate(); document.getElementById('gateErr').textContent = 'Saved Daytona key is no longer valid. Please re-enter.' }
+  else if (ACCOUNT.daytonaServerConfigured) { showApp() }
+  else { lsSet(LS.daytonaKey, ''); showGate(); document.getElementById('gateErr').textContent = 'Saved Daytona key is no longer valid. Please re-enter.' }
 }
 
 async function launch() {
@@ -1619,10 +1641,12 @@ setInterval(function () {
   </div>
   <div class="disclosure">Your keys are stored only in this browser (localStorage) and sent directly to your own Daytona / GitHub / Linear / Render. This server never stores them.</div>
 
+  <div id="drawerCards">
+  <div id="integrationCards">
   <!-- Daytona -->
   <div class="intg">
     <div class="ihead"><span class="iname">Daytona</span><span class="req">required</span><span id="b-daytona" class="badge b-off" style="margin-left:auto">Not connected</span></div>
-    <p class="idesc">Spins up the sandboxes that run OpenCode. This is the access key for the whole app.</p>
+    <p class="idesc">Spins up the sandboxes that run OpenCode. Required. If the host already configured a Daytona key (via the setup CLI), this is handled for you.</p>
     <div id="saved-daytona" class="saved hide"></div>
     <div id="edit-daytona">
       <div class="inwrap"><input id="in-daytona" type="password" placeholder="dtn_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-daytona', this)">show</button></div>
@@ -1672,7 +1696,7 @@ setInterval(function () {
   <!-- Render -->
   <div class="intg">
     <div class="ihead"><span class="iname">Render</span><span class="opt">optional</span><span id="b-render" class="badge b-off" style="margin-left:auto">Not connected</span></div>
-    <p class="idesc">Bring your Render key to self-host this launcher and (later) deploy apps OpenCode builds. See the README for one-click self-hosting.</p>
+    <p class="idesc">Not needed to run this launcher &mdash; you deploy it with <code>npm run setup</code> (or by connecting your fork in the Render dashboard). This key is only for future &ldquo;deploy what OpenCode builds&rdquo; features.</p>
     <div id="saved-render" class="saved hide"></div>
     <div id="edit-render">
       <div class="inwrap"><input id="in-render" type="password" placeholder="rnd_..." autocomplete="off" /><button type="button" class="eye" onclick="toggleEye('in-render', this)">show</button></div>
@@ -1683,6 +1707,8 @@ setInterval(function () {
       <button id="dis-render" class="btn-danger hide" onclick="disconnect('render')">Disconnect</button>
     </div>
     <div id="err-render" class="err"></div>
+  </div>
+  </div>
   </div>
 </div>
 </body>
