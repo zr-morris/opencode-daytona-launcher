@@ -374,6 +374,10 @@ app.post('/api/launch', requireAuth, async (req: Request, res: Response) => {
     // which does not need these env vars. So we only use the token for git creds.
     const sessForLaunch = getSession(req)
     const ghForSandbox = (sessForLaunch && sessForLaunch.ghToken) || creds.githubToken
+    // GH_TOKEN is safe: the gh CLI + GitHub-aware tooling read it, but OpenCode
+    // does NOT enable its (broken-for-us) Copilot/Models providers from it —
+    // only GITHUB_TOKEN does that. So we wire GitHub without breaking gpt-5.5.
+    if (ghForSandbox) envVars.GH_TOKEN = ghForSandbox
     if (creds.linearKey) envVars.LINEAR_API_KEY = creds.linearKey
     if (creds.linearTeam) envVars.LINEAR_TEAM_ID = creds.linearTeam
     if (creds.renderKey) envVars.RENDER_API_KEY = creds.renderKey
@@ -407,7 +411,9 @@ app.post('/api/launch', requireAuth, async (req: Request, res: Response) => {
       `Never give the user a link that requires logging in to Daytona, and never use a signed or authenticated preview URL. Use only the plain ${previewUrlPattern} form.`,
       'Bind servers to host 0.0.0.0 (not 127.0.0.1) so the public preview proxy can reach them. For example: python3 -m http.server 8000 --bind 0.0.0.0, or for vite/node set host 0.0.0.0.',
       'When starting a server, start it in the background with & so the command does not block further instructions, then print the public preview URL for that port.',
-    ].join(' ')
+      ghForSandbox ? 'GitHub is wired: git is configured with credentials and the gh CLI is authenticated for the user. You can git clone/commit/push over HTTPS and use gh (e.g. gh repo create, gh pr create, gh issue list, gh api) without asking for a token.' : '',
+      creds.linearKey ? 'Linear is available: the LINEAR_API_KEY environment variable is set' + (creds.linearTeam ? ' and LINEAR_TEAM_ID identifies the chosen team' : '') + '. You can call the Linear GraphQL API at https://api.linear.app/graphql using Authorization: $LINEAR_API_KEY (no Bearer prefix) to read/create issues.' : '',
+    ].filter(Boolean).join(' ')
 
     const opencodeConfig = {
       $schema: 'https://opencode.ai/config.json',
@@ -451,18 +457,31 @@ app.post('/api/launch', requireAuth, async (req: Request, res: Response) => {
     if (ghForSandbox) {
       const ghLine = `https://x-access-token:${ghForSandbox}@github.com`
       const ghB64 = Buffer.from(ghLine + '\n').toString('base64')
+      const ghTokB64 = Buffer.from(ghForSandbox).toString('base64')
       try {
         await sandbox.process.executeCommand(
+          // git credential helper (clone/push over https)
           `git config --global credential.helper store; ` +
             `umask 077; echo '${ghB64}' | base64 -d > "$HOME/.git-credentials"; ` +
             `chmod 600 "$HOME/.git-credentials"; ` +
             `git config --global user.name "OpenCode"; ` +
+            // install the gh CLI (fast on node:20 / Debian) if missing
+            `if ! command -v gh >/dev/null 2>&1; then ` +
+            `  (type -p curl >/dev/null || apt-get install -y -qq curl) >/dev/null 2>&1; ` +
+            `  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg 2>/dev/null | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; ` +
+            `  chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; ` +
+            `  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; ` +
+            `  apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq gh >/dev/null 2>&1; ` +
+            `fi; ` +
+            // authenticate gh with the token (via stdin, never on the command line)
+            `echo '${ghTokB64}' | base64 -d | gh auth login --with-token >/dev/null 2>&1 || true; ` +
+            `gh auth setup-git >/dev/null 2>&1 || true; ` +
             `true`,
           undefined,
           undefined,
-          60,
+          180,
         )
-        console.log('[launch] GitHub credential helper configured (%s)', last4(ghForSandbox))
+        console.log('[launch] GitHub wired: git creds + gh CLI authenticated (%s)', last4(ghForSandbox))
       } catch (e: any) {
         console.warn('[launch] GitHub credential setup failed (non-fatal):', e?.message || e)
       }
