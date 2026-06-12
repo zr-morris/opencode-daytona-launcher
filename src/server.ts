@@ -364,9 +364,16 @@ app.post('/api/launch', requireAuth, async (req: Request, res: Response) => {
     // Inject the user's BYOK integration creds so OpenCode can use them.
     // GitHub: prefer the logged-in user's OAuth token (auto-provisioned via the
     // GitHub login gate) so no separate PAT is needed; fall back to a header/env.
+    //
+    // IMPORTANT: do NOT export the GitHub token as GITHUB_TOKEN / GH_TOKEN env
+    // vars. OpenCode auto-activates its "GitHub Copilot" and "GitHub Models"
+    // providers whenever GITHUB_TOKEN is present, which adds a duplicate, broken
+    // gpt-5.5 (and other models) routed through Copilot — failing with "socket
+    // connection closed" because a normal OAuth/PAT token has no Copilot access.
+    // Git clone/push still works via the ~/.git-credentials helper set up below,
+    // which does not need these env vars. So we only use the token for git creds.
     const sessForLaunch = getSession(req)
     const ghForSandbox = (sessForLaunch && sessForLaunch.ghToken) || creds.githubToken
-    if (ghForSandbox) { envVars.GH_TOKEN = ghForSandbox; envVars.GITHUB_TOKEN = ghForSandbox }
     if (creds.linearKey) envVars.LINEAR_API_KEY = creds.linearKey
     if (creds.linearTeam) envVars.LINEAR_TEAM_ID = creds.linearTeam
     if (creds.renderKey) envVars.RENDER_API_KEY = creds.renderKey
